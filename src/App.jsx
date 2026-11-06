@@ -3,7 +3,9 @@ import AuthScreen from "./components/AuthScreen.jsx";
 import TodayPage from "./pages/TodayPage.jsx";
 import MemoriesPage from "./pages/MemoriesPage.jsx";
 import FriendsPage from "./pages/FriendsPage.jsx";
+import ProfilePage from "./pages/ProfilePage.jsx";
 import { useAuth } from "./hooks/useAuth.js";
+import { useTheme } from "./hooks/useThemes.js";
 import { useClock } from "./hooks/useClock.js";
 import { useEntries } from "./hooks/useEntries.js";
 import { DEFAULT_TIMEZONE, computeStreak } from "./lib/dates.js";
@@ -12,10 +14,12 @@ const VIEWS = [
   { id: "journal", icon: "✎", label: "Today" },
   { id: "memories", icon: "▣", label: "Memories" },
   { id: "friends", icon: "♧", label: "Friends" },
+  { id: "profile", icon: "◍", label: "Profile" },
 ];
 
 export default function App() {
   const auth = useAuth();
+  const appearance = useTheme(); // one call, keep the whole object
 
   if (auth.status === "loading") {
     return <div className="splash">Loading…</div>;
@@ -34,7 +38,12 @@ export default function App() {
     return <AuthScreen onLogin={auth.login} onSignup={auth.signup} />;
   }
   return (
-    <Journal user={auth.user} profile={auth.profile} onLogout={auth.logout} />
+    <Journal
+      user={auth.user}
+      profile={auth.profile}
+      onLogout={auth.logout}
+      appearance={appearance}
+    />
   );
 }
 
@@ -42,6 +51,7 @@ export default function App() {
 function Journal({ user, profile, onLogout }) {
   const [view, setView] = useState("journal");
   const journal = useEntries();
+  const appearance = useTheme();
 
   const timezone = user.user_metadata?.timezone || DEFAULT_TIMEZONE;
   const { today, secondsLeft } = useClock(timezone);
@@ -135,6 +145,16 @@ function Journal({ user, profile, onLogout }) {
             <MemoriesPage journal={journal} today={today} />
           )}
           {view === "friends" && <FriendsPage />}
+          {view === "profile" && (
+            <ProfilePage
+              user={user}
+              name={name}
+              started={started}
+              timezone={timezone}
+              appearance={appearance}
+              onLogout={onLogout}
+            />
+          )}
         </section>
       </main>
     </div>
