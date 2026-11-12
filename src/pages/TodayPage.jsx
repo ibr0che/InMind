@@ -1,25 +1,66 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { formatRemaining, longDate } from "../lib/dates.js";
 
 const MOODS = ["Great", "Good", "Okay", "Low", "Rough"];
-const EMPTY_FORM = { title: "", body: "", mood: "Okay", visibility: "private" };
+const EMPTY_FORM = {
+  title: "",
+  body: "",
+  mood: "Okay",
+  visibility: "private",
+  highlight: "",
+  lessons: "",
+};
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const AUTOSAVE_MS = 1500;
+const HIGHLIGHT_MAX = 280;
+const LESSONS_MAX = 5000;
 
 const pickFields = (entry) => ({
   title: entry.title ?? "",
   body: entry.body ?? "",
   mood: entry.mood ?? "Okay",
   visibility: entry.visibility ?? "private",
+  highlight: entry.highlight ?? "",
+  lessons: entry.lessons ?? "",
 });
 
-export default function TodayPage({ today, secondsLeft, journal }) {
-  const { entries, status, saveToday, lock, addNote, removeNote, addMedia, removeMedia } = journal;
+const hasText = (form) =>
+  Boolean(
+    form.title.trim() ||
+    form.body.trim() ||
+    form.highlight.trim() ||
+    form.lessons.trim(),
+  );
 
-  const entry = useMemo(() => entries.find((item) => item.entry_date === today) || null, [entries, today]);
+export default function TodayPage({ today, secondsLeft, journal }) {
+  const {
+    entries,
+    status,
+    saveToday,
+    lock,
+    addNote,
+    removeNote,
+    addMedia,
+    removeMedia,
+  } = journal;
+
+  const entry = useMemo(
+    () => entries.find((item) => item.entry_date === today) || null,
+    [entries, today],
+  );
   const locked = Boolean(entry?.locked);
   const notes = useMemo(
-    () => [...(entry?.notes || [])].sort((a, b) => a.created_at.localeCompare(b.created_at)),
+    () =>
+      [...(entry?.notes || [])].sort((a, b) =>
+        a.created_at.localeCompare(b.created_at),
+      ),
     [entry],
   );
   const media = entry?.media || [];
@@ -42,6 +83,16 @@ export default function TodayPage({ today, secondsLeft, journal }) {
     setSaveState("");
   }, [status, today, entry]);
 
+  // The highlight box grows with its text, so nothing is ever cut off on a phone.
+  // (Hooks must run before the early returns below, so this lives up here.)
+  const highlightRef = useRef(null);
+  useLayoutEffect(() => {
+    const box = highlightRef.current;
+    if (!box) return;
+    box.style.height = "auto";
+    box.style.height = `${box.scrollHeight}px`;
+  }, [form.highlight, status]);
+
   const save = useCallback(
     async (fields) => {
       setDirty(false);
@@ -59,7 +110,7 @@ export default function TodayPage({ today, secondsLeft, journal }) {
   // Autosave shortly after the person stops typing.
   useEffect(() => {
     if (!dirty || locked || status !== "ready") return undefined;
-    if (!entry && !form.title.trim() && !form.body.trim()) return undefined;
+    if (!entry && !hasText(form)) return undefined;
     const timer = setTimeout(() => save(form), AUTOSAVE_MS);
     return () => clearTimeout(timer);
   }, [form, dirty, locked, status, entry, save]);
@@ -112,7 +163,12 @@ export default function TodayPage({ today, secondsLeft, journal }) {
 
   async function handleLock() {
     if (!entry) return;
-    if (!window.confirm("Lock today's entry early? You will not be able to edit it afterward.")) return;
+    if (
+      !window.confirm(
+        "Lock today's entry early? You will not be able to edit it afterward.",
+      )
+    )
+      return;
     try {
       if (dirty) await saveToday(today, form); // don't lose unsaved edits
       setDirty(false);
@@ -123,9 +179,13 @@ export default function TodayPage({ today, secondsLeft, journal }) {
     }
   }
 
-  const progress = Math.max(0, Math.min(100, 100 - (secondsLeft / 86400) * 100));
+  const progress = Math.max(
+    0,
+    Math.min(100, 100 - (secondsLeft / 86400) * 100),
+  );
 
-  if (status === "loading") return <p className="subtle">Loading your journal…</p>;
+  if (status === "loading")
+    return <p className="subtle">Loading your journal…</p>;
   if (status === "error") {
     return (
       <div className="card empty-large">
@@ -139,17 +199,25 @@ export default function TodayPage({ today, secondsLeft, journal }) {
   }
 
   return (
-    <>
+    <div className="today">
       <div className="date-row">
         <div>
           <p className="eyebrow">{longDate(today).toUpperCase()}</p>
           <h1>Today</h1>
         </div>
-        <div className={`countdown ${locked ? "locked" : ""}`}>
-          <span>
-            {locked ? "🔒" : "◷"} {locked ? "Entry locked" : "Editing closes in"}
+        <div className="today-meta">
+          <span className="save-pill" role="status">
+            {saveState || (locked ? "Locked" : "Saves as you write")}
           </span>
-          <strong>{locked ? "Come back tomorrow" : formatRemaining(secondsLeft)}</strong>
+          <div className={`countdown ${locked ? "locked" : ""}`}>
+            <span>
+              {locked ? "🔒" : "◷"}{" "}
+              {locked ? "Entry locked" : "Editing closes in"}
+            </span>
+            <strong>
+              {locked ? "Come back tomorrow" : formatRemaining(secondsLeft)}
+            </strong>
+          </div>
         </div>
       </div>
       <div className="progress">
@@ -160,55 +228,112 @@ export default function TodayPage({ today, secondsLeft, journal }) {
         <p>
           <strong>A little moment, made permanent.</strong>
           <br />
-          Add to your day as it happens. Your entry locks at midnight so your memories stay honest.
+          Add to your day as it happens. Your entry locks at midnight so your
+          memories stay honest.
         </p>
       </div>
 
-      <div className="journal-grid">
-        <div className="main-card card">
-          <div className="card-head">
-            <span>DAILY ENTRY</span>
-            <span className="saved" role="status">
-              {saveState || (locked ? "Locked" : "Saves as you write")}
+      <div className="today-grid">
+        <section className="card highlight-card">
+          <div className="highlight-icon" aria-hidden="true">
+            ☼
+          </div>
+          <div className="highlight-body">
+            <label className="highlight-label" htmlFor="highlight">
+              HIGHLIGHT OF THE DAY
+            </label>
+            <textarea
+              id="highlight"
+              ref={highlightRef}
+              className="highlight-input"
+              rows={2}
+              maxLength={HIGHLIGHT_MAX}
+              disabled={locked}
+              value={form.highlight}
+              onChange={(e) => change("highlight", e.target.value)}
+              placeholder="What was the best part of today?"
+            />
+            <span className="char-count">
+              {form.highlight.length}/{HIGHLIGHT_MAX}
             </span>
           </div>
-          <input
-            className="title-input"
-            disabled={locked}
-            value={form.title}
-            onChange={(e) => change("title", e.target.value)}
-            placeholder="Give today a title..."
-          />
-          <textarea
-            className="body-input"
-            disabled={locked}
-            value={form.body}
-            onChange={(e) => change("body", e.target.value)}
-            placeholder="What is on your mind? What do you want to remember about today?"
-          />
-          <div className="entry-footer">
-            <label className="mood-select">
-              Mood{" "}
-              <select disabled={locked} value={form.mood} onChange={(e) => change("mood", e.target.value)}>
-                {MOODS.map((item) => (
-                  <option key={item}>{item}</option>
-                ))}
-              </select>
-            </label>
-            <label className="visibility">
-              {form.visibility === "private" ? "▣" : "♧"}{" "}
-              <select disabled={locked} value={form.visibility} onChange={(e) => change("visibility", e.target.value)}>
-                <option value="private">Only me</option>
-                <option value="friends">Friends</option>
-              </select>
-            </label>
-            <button className="primary" disabled={locked} onClick={() => save(form)}>
-              Save entry
-            </button>
-          </div>
+        </section>
+
+        <div className="today-main">
+          <section className="card journal-card">
+            <div className="card-head">
+              <span>DAILY ENTRY</span>
+            </div>
+            <input
+              className="title-input"
+              disabled={locked}
+              value={form.title}
+              onChange={(e) => change("title", e.target.value)}
+              placeholder="Give today a title..."
+              aria-label="Entry title"
+            />
+            <textarea
+              className="body-input"
+              disabled={locked}
+              value={form.body}
+              onChange={(e) => change("body", e.target.value)}
+              placeholder="What is on your mind? What do you want to remember about today?"
+              aria-label="Journal entry"
+            />
+            <div className="entry-footer">
+              <label className="mood-select">
+                Mood{" "}
+                <select
+                  disabled={locked}
+                  value={form.mood}
+                  onChange={(e) => change("mood", e.target.value)}
+                >
+                  {MOODS.map((item) => (
+                    <option key={item}>{item}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="visibility">
+                {form.visibility === "private" ? "▣" : "♧"}{" "}
+                <select
+                  disabled={locked}
+                  value={form.visibility}
+                  onChange={(e) => change("visibility", e.target.value)}
+                >
+                  <option value="private">Only me</option>
+                  <option value="friends">Friends</option>
+                </select>
+              </label>
+              <button
+                className="primary"
+                disabled={locked}
+                onClick={() => save(form)}
+              >
+                Save entry
+              </button>
+            </div>
+          </section>
+
+          <section className="card lessons-card">
+            <div className="card-head">
+              <span>LESSONS OF THE DAY</span>
+            </div>
+            <p className="card-sub">
+              What did today teach you? One lesson per line works well.
+            </p>
+            <textarea
+              className="lessons-input"
+              disabled={locked}
+              maxLength={LESSONS_MAX}
+              value={form.lessons}
+              onChange={(e) => change("lessons", e.target.value)}
+              placeholder={"Rest is part of the work.\nAsk for help sooner."}
+              aria-label="Lessons of the day"
+            />
+          </section>
         </div>
 
-        <div className="side-stack">
+        <div className="today-side">
           {problem && (
             <p className="inline-error" role="alert">
               {problem}
@@ -240,14 +365,21 @@ export default function TodayPage({ today, secondsLeft, journal }) {
                     <div>
                       <p>{item.text}</p>
                       <small>
-                        {new Date(item.created_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}
+                        {new Date(item.created_at).toLocaleTimeString([], {
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })}
                       </small>
                     </div>
                     {!locked && (
                       <button
                         className="icon-button"
                         aria-label="Delete note"
-                        onClick={() => removeNote(entry.id, item.id).catch((e) => setProblem(e.message))}
+                        onClick={() =>
+                          removeNote(entry.id, item.id).catch((e) =>
+                            setProblem(e.message),
+                          )
+                        }
                       >
                         ×
                       </button>
@@ -265,10 +397,20 @@ export default function TodayPage({ today, secondsLeft, journal }) {
               <span>MEDIA</span>
               <span>{media.length} added</span>
             </div>
-            <label className={`upload ${locked || uploading ? "disabled" : ""}`}>
-              <input disabled={locked || uploading} type="file" accept="image/*,video/*" multiple onChange={handleFiles} />
+            <label
+              className={`upload ${locked || uploading ? "disabled" : ""}`}
+            >
+              <input
+                disabled={locked || uploading}
+                type="file"
+                accept="image/*,video/*"
+                multiple
+                onChange={handleFiles}
+              />
               <span>{uploading ? "…" : "＋"}</span>
-              <strong>{uploading ? "Uploading" : "Add a photo or video"}</strong>
+              <strong>
+                {uploading ? "Uploading" : "Add a photo or video"}
+              </strong>
               <small>Up to 50 MB each</small>
             </label>
             {media.length > 0 && (
@@ -284,7 +426,11 @@ export default function TodayPage({ today, secondsLeft, journal }) {
                       <button
                         className="icon-button media-remove"
                         aria-label={`Remove ${item.file_name}`}
-                        onClick={() => removeMedia(entry.id, item.id).catch((e) => setProblem(e.message))}
+                        onClick={() =>
+                          removeMedia(entry.id, item.id).catch((e) =>
+                            setProblem(e.message),
+                          )
+                        }
                       >
                         ×
                       </button>
@@ -302,14 +448,21 @@ export default function TodayPage({ today, secondsLeft, journal }) {
           <span className="reflection-icon">◒</span>
           <div>
             <strong>End-of-day reflection</strong>
-            <p>AI insights will live here later — patterns, habits, and gentle suggestions based on your journal.</p>
+            <p>
+              AI insights will live here later — patterns, habits, and gentle
+              suggestions based on your journal.
+            </p>
           </div>
           <span className="soon">COMING SOON</span>
         </div>
-        <button className="lock-button" disabled={locked || !entry} onClick={handleLock}>
+        <button
+          className="lock-button"
+          disabled={locked || !entry}
+          onClick={handleLock}
+        >
           🔒 Lock entry early
         </button>
       </div>
-    </>
+    </div>
   );
 }

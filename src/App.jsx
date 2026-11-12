@@ -79,7 +79,18 @@ function Journal({ user, profile, onLogout }) {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-mark">✦</span>
+          <span className="brand-mark">
+            <img
+              src="src/images/logo.png"
+              alt="Logo"
+              width={50}
+              height={50}
+              style={{
+                borderRadius: "70%",
+                objectFit: "fill",
+              }}
+            />
+          </span>
           <div>
             <strong>daymark</strong>
             <small>your life, remembered</small>

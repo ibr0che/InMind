@@ -5,6 +5,7 @@ import cors from "cors";
 import helmet from "helmet";
 import { requireUser } from "./auth.js";
 import { createUserClient, requireEnvironment } from "./supabase.js";
+import rateLimit from "express-rate-limit";
 
 requireEnvironment();
 
@@ -20,13 +21,44 @@ app.use(helmet());
 app.use(cors({ origin: clientOrigin }));
 app.use(express.json({ limit: "1mb" }));
 
+//rate limiter for logins to deter brute force
+const limiter = (options) =>
+  rateLimit({ standardHeaders: true, legacyHeaders: false, ...options });
+
+// Only failed sign-ins count, so normal use never hits the cap.
+const loginLimiter = limiter({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  skipSuccessfulRequests: true,
+  message: { error: "Too many sign-in attempts. Try again in a few minutes." },
+});
+const signupLimiter = limiter({
+  windowMs: 60 * 60 * 1000,
+  limit: 10,
+  message: { error: "Too many sign-up attempts. Try again later." },
+});
+
+app.use("/api/auth/login", loginLimiter);
+app.use("/api/auth/signup", signupLimiter);
+app.use(
+  "/api/auth/refresh",
+  limiter({
+    windowMs: 15 * 60 * 1000,
+    limit: 60,
+    message: { error: "Too many requests." },
+  }),
+);
+
 /* ---------- helpers ---------- */
 
 function todayInUserTimezone(user) {
-  const timezone = user.user_metadata?.timezone || "America/Los_Angeles";
-  return new Intl.DateTimeFormat("en-CA", { timeZone: timezone }).format(
-    new Date(),
-  );
+  const format = (timeZone) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
+  try {
+    return format(user.user_metadata?.timezone || "America/Los_Angeles");
+  } catch {
+    return format("America/Los_Angeles");
+  }
 }
 
 // Entries are only editable on their own day (in the user's timezone) and
@@ -72,6 +104,35 @@ async function withMediaUrls(supabase, entries) {
     }
   }
   return entries;
+}
+
+const TEXT_LIMITS = { title: 200, body: 20000, highlight: 280, lessons: 5000 };
+const MOODS = ["Great", "Good", "Okay", "Low", "Rough"];
+const VISIBILITIES = ["private", "friends"];
+
+// Returns { value } holding only known, valid fields, or { error } with a message safe to show.
+// Unknown keys (locked, user_id, ...) are ignored, so a client can't set them.
+function parseEntryFields(input = {}) {
+  const value = {};
+  for (const [key, max] of Object.entries(TEXT_LIMITS)) {
+    if (input[key] === undefined) continue;
+    if (typeof input[key] !== "string" || input[key].length > max)
+      return {
+        error: `${key} must be text up to ${max.toLocaleString("en-US")} characters.`,
+      };
+    value[key] = input[key];
+  }
+  if (input.mood !== undefined) {
+    if (!MOODS.includes(input.mood))
+      return { error: "Choose a mood from the list." };
+    value.mood = input.mood;
+  }
+  if (input.visibility !== undefined) {
+    if (!VISIBILITIES.includes(input.visibility))
+      return { error: "Choose who can see this entry." };
+    value.visibility = input.visibility;
+  }
+  return { value };
 }
 
 /* ---------- health ---------- */
@@ -132,8 +193,21 @@ app.post("/api/auth/login", async (req, res, next) => {
   }
 });
 
-app.post("/api/auth/logout", requireUser, async (req, res) => {
-  await req.supabase.auth.signOut();
+app.post("/api/auth/logout", async (req, res) => {
+  const token = (req.headers.authorization || "").replace(/^Bearer /, "");
+  if (token) {
+    try {
+      await fetch(`${process.env.SUPABASE_URL}/auth/v1/logout?scope=local`, {
+        method: "POST",
+        headers: {
+          apikey: process.env.SUPABASE_PUBLISHABLE_KEY,
+          Authorization: `Bearer ${token}`,
+        },
+      });
+    } catch (error) {
+      console.error("[auth] logout revoke failed:", error.message);
+    }
+  }
   res.status(204).send();
 });
 
@@ -189,28 +263,28 @@ app.get("/api/entries", requireUser, async (req, res, next) => {
 
 app.post("/api/entries", requireUser, async (req, res, next) => {
   try {
-    const {
-      entry_date,
-      title = "",
-      body = "",
-      mood = "Okay",
-      visibility = "private",
-    } = req.body;
+    const { entry_date, ...fields } = req.body ?? {};
     if (!entry_date)
       return res.status(400).json({ error: "entry_date is required." });
     if (entry_date !== todayInUserTimezone(req.user))
       return res
         .status(400)
         .json({ error: "You can only start an entry for today." });
+    const parsed = parseEntryFields(fields);
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+
     const { data, error } = await req.supabase
       .from("entries")
       .insert({
         user_id: req.user.id,
         entry_date,
-        title,
-        body,
-        mood,
-        visibility,
+        title: "",
+        body: "",
+        highlight: "",
+        lessons: "",
+        mood: "Okay",
+        visibility: "private",
+        ...parsed.value, // whatever the client sent overrides the defaults above
       })
       .select("*, notes(*), media(*)")
       .single();
@@ -226,15 +300,14 @@ app.post("/api/entries", requireUser, async (req, res, next) => {
 
 app.patch("/api/entries/:id", requireUser, async (req, res, next) => {
   try {
-    const allowed = ["title", "body", "mood", "visibility"];
-    const updates = Object.fromEntries(
-      Object.entries(req.body).filter(([key]) => allowed.includes(key)),
-    );
-    if (!Object.keys(updates).length)
+    const parsed = parseEntryFields(req.body ?? {});
+    if (parsed.error) return res.status(400).json({ error: parsed.error });
+    if (!Object.keys(parsed.value).length)
       return res
         .status(400)
         .json({ error: "No editable fields were provided." });
-    updates.updated_at = new Date().toISOString();
+
+    const updates = { ...parsed.value, updated_at: new Date().toISOString() };
     const { data, error } = await req.supabase
       .from("entries")
       .update(updates)
