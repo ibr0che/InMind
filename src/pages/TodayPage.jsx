@@ -7,28 +7,32 @@ import {
   useState,
 } from "react";
 import { formatRemaining, longDate } from "../lib/dates.js";
+import { autoCapitalize } from "../lib/autoCapitalize.js";
 
 const MOODS = ["Great", "Good", "Okay", "Low", "Rough"];
 const EMPTY_FORM = {
   title: "",
   body: "",
   mood: "Okay",
-  visibility: "private",
   highlight: "",
   lessons: "",
 };
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 const AUTOSAVE_MS = 1500;
 const HIGHLIGHT_MAX = 280;
-const LESSONS_MAX = 5000;
+const LESSONS_MAX = 100;
+const TITLE_MAX = 25;
+const BODY_MAX = 2500;
+const NOTE_MAX = 100;
+const NOTES_PER_DAY = 10; // matches the server
 
 const pickFields = (entry) => ({
   title: entry.title ?? "",
   body: entry.body ?? "",
   mood: entry.mood ?? "Okay",
-  visibility: entry.visibility ?? "private",
   highlight: entry.highlight ?? "",
-  lessons: entry.lessons ?? "",
+  // Trailing blank lines look empty but hide the placeholder and stretch the box.
+  lessons: (entry.lessons ?? "").trimEnd(),
 });
 
 const hasText = (form) =>
@@ -39,12 +43,26 @@ const hasText = (form) =>
     form.lessons.trim(),
   );
 
+// Sizes a textarea to its text, so it grows line by line instead of scrolling.
+function useAutoHeight(ref, ...deps) {
+  useLayoutEffect(() => {
+    const box = ref.current;
+    if (!box) return;
+    // Empty: let the CSS rows decide, so the box always fits its placeholder.
+    if (!box.value) {
+      box.style.height = "";
+      return;
+    }
+    box.style.height = "auto";
+    box.style.height = `${box.scrollHeight}px`;
+  }, deps);
+}
+
 export default function TodayPage({ today, secondsLeft, journal }) {
   const {
     entries,
     status,
     saveToday,
-    lock,
     addNote,
     removeNote,
     addMedia,
@@ -55,7 +73,6 @@ export default function TodayPage({ today, secondsLeft, journal }) {
     () => entries.find((item) => item.entry_date === today) || null,
     [entries, today],
   );
-  const locked = Boolean(entry?.locked);
   const notes = useMemo(
     () =>
       [...(entry?.notes || [])].sort((a, b) =>
@@ -63,7 +80,8 @@ export default function TodayPage({ today, secondsLeft, journal }) {
       ),
     [entry],
   );
-  const media = entry?.media || [];
+  const photo = entry?.media?.[0] || null; // one photo per day
+  const notesFull = notes.length >= NOTES_PER_DAY;
 
   const [form, setForm] = useState(EMPTY_FORM);
   const [dirty, setDirty] = useState(false);
@@ -83,15 +101,15 @@ export default function TodayPage({ today, secondsLeft, journal }) {
     setSaveState("");
   }, [status, today, entry]);
 
-  // The highlight box grows with its text, so nothing is ever cut off on a phone.
-  // (Hooks must run before the early returns below, so this lives up here.)
+  // The highlight, note and lessons boxes grow with their text, so nothing is
+  // cut off and they never need a scrollbar.
+  // (Hooks must run before the early returns below, so these live up here.)
   const highlightRef = useRef(null);
-  useLayoutEffect(() => {
-    const box = highlightRef.current;
-    if (!box) return;
-    box.style.height = "auto";
-    box.style.height = `${box.scrollHeight}px`;
-  }, [form.highlight, status]);
+  const noteRef = useRef(null);
+  const lessonsRef = useRef(null);
+  useAutoHeight(highlightRef, form.highlight, status);
+  useAutoHeight(noteRef, noteText, status);
+  useAutoHeight(lessonsRef, form.lessons, status);
 
   const save = useCallback(
     async (fields) => {
@@ -107,13 +125,28 @@ export default function TodayPage({ today, secondsLeft, journal }) {
     [saveToday, today],
   );
 
+  // The latest values, read by the timers below. "save" gets a new identity on
+  // every render (the clock re-renders the page each second), so depending on
+  // it directly would restart the autosave timer before it could ever fire.
+  const latest = useRef({});
+  latest.current = { form, dirty, entry, save };
+
   // Autosave shortly after the person stops typing.
   useEffect(() => {
-    if (!dirty || locked || status !== "ready") return undefined;
+    if (!dirty || status !== "ready") return undefined;
     if (!entry && !hasText(form)) return undefined;
-    const timer = setTimeout(() => save(form), AUTOSAVE_MS);
+    const timer = setTimeout(() => latest.current.save(latest.current.form), AUTOSAVE_MS);
     return () => clearTimeout(timer);
-  }, [form, dirty, locked, status, entry, save]);
+  }, [form, dirty, status, entry]);
+
+  // Leaving the page (Memories, Profile) saves whatever hasn't been saved yet.
+  useEffect(
+    () => () => {
+      const { form, dirty, entry, save } = latest.current;
+      if (dirty && (entry || hasText(form))) save(form);
+    },
+    [],
+  );
 
   function change(field, value) {
     setForm((current) => ({ ...current, [field]: value }));
@@ -126,7 +159,7 @@ export default function TodayPage({ today, secondsLeft, journal }) {
   async function handleAddNote(event) {
     event.preventDefault();
     const text = noteText.trim();
-    if (!text || locked) return;
+    if (!text || notesFull) return;
     try {
       const target = await ensureEntry();
       await addNote(target.id, text);
@@ -137,45 +170,23 @@ export default function TodayPage({ today, secondsLeft, journal }) {
     }
   }
 
-  async function handleFiles(event) {
-    const files = [...event.target.files];
+  async function handleFile(event) {
+    const file = event.target.files[0];
     event.target.value = "";
-    if (!files.length || locked) return;
+    if (!file) return;
+    if (!file.type.startsWith("image/"))
+      return setProblem(`${file.name} isn't a photo.`);
+    if (file.size > MAX_UPLOAD_BYTES)
+      return setProblem(`${file.name} is over the 50 MB limit.`);
     setUploading(true);
     setProblem("");
     try {
       const target = await ensureEntry();
-      for (const file of files) {
-        if (!/^(image|video)\//.test(file.type)) {
-          setProblem(`${file.name} isn't a photo or video.`);
-        } else if (file.size > MAX_UPLOAD_BYTES) {
-          setProblem(`${file.name} is over the 50 MB limit.`);
-        } else {
-          await addMedia(target.id, file);
-        }
-      }
+      await addMedia(target.id, file);
     } catch (error) {
       setProblem(error.message);
     } finally {
       setUploading(false);
-    }
-  }
-
-  async function handleLock() {
-    if (!entry) return;
-    if (
-      !window.confirm(
-        "Lock today's entry early? You will not be able to edit it afterward.",
-      )
-    )
-      return;
-    try {
-      if (dirty) await saveToday(today, form); // don't lose unsaved edits
-      setDirty(false);
-      await lock(entry.id);
-      setSaveState("");
-    } catch (error) {
-      setProblem(error.message);
     }
   }
 
@@ -207,16 +218,11 @@ export default function TodayPage({ today, secondsLeft, journal }) {
         </div>
         <div className="today-meta">
           <span className="save-pill" role="status">
-            {saveState || (locked ? "Locked" : "Saves as you write")}
+            {saveState || "Saves as you write"}
           </span>
-          <div className={`countdown ${locked ? "locked" : ""}`}>
-            <span>
-              {locked ? "🔒" : "◷"}{" "}
-              {locked ? "Entry locked" : "Editing closes in"}
-            </span>
-            <strong>
-              {locked ? "Come back tomorrow" : formatRemaining(secondsLeft)}
-            </strong>
+          <div className="countdown">
+            <span>◷ Editing closes in</span>
+            <strong>{formatRemaining(secondsLeft)}</strong>
           </div>
         </div>
       </div>
@@ -248,14 +254,10 @@ export default function TodayPage({ today, secondsLeft, journal }) {
               className="highlight-input"
               rows={2}
               maxLength={HIGHLIGHT_MAX}
-              disabled={locked}
               value={form.highlight}
               onChange={(e) => change("highlight", e.target.value)}
               placeholder="What was the best part of today?"
             />
-            <span className="char-count">
-              {form.highlight.length}/{HIGHLIGHT_MAX}
-            </span>
           </div>
         </section>
 
@@ -266,7 +268,7 @@ export default function TodayPage({ today, secondsLeft, journal }) {
             </div>
             <input
               className="title-input"
-              disabled={locked}
+              maxLength={TITLE_MAX}
               value={form.title}
               onChange={(e) => change("title", e.target.value)}
               placeholder="Give today a title..."
@@ -274,9 +276,20 @@ export default function TodayPage({ today, secondsLeft, journal }) {
             />
             <textarea
               className="body-input"
-              disabled={locked}
+              maxLength={BODY_MAX}
               value={form.body}
-              onChange={(e) => change("body", e.target.value)}
+              onChange={(e) => {
+                // Word-style capitals as you type. Fix the box directly and put the
+                // caret back, so React doesn't jump it to the end.
+                const box = e.target;
+                const caret = box.selectionStart;
+                const text = autoCapitalize(form.body, box.value, caret);
+                if (text !== box.value) {
+                  box.value = text;
+                  box.setSelectionRange(caret, caret);
+                }
+                change("body", text);
+              }}
               placeholder="What is on your mind? What do you want to remember about today?"
               aria-label="Journal entry"
             />
@@ -284,7 +297,6 @@ export default function TodayPage({ today, secondsLeft, journal }) {
               <label className="mood-select">
                 Mood{" "}
                 <select
-                  disabled={locked}
                   value={form.mood}
                   onChange={(e) => change("mood", e.target.value)}
                 >
@@ -293,22 +305,7 @@ export default function TodayPage({ today, secondsLeft, journal }) {
                   ))}
                 </select>
               </label>
-              <label className="visibility">
-                {form.visibility === "private" ? "▣" : "♧"}{" "}
-                <select
-                  disabled={locked}
-                  value={form.visibility}
-                  onChange={(e) => change("visibility", e.target.value)}
-                >
-                  <option value="private">Only me</option>
-                  <option value="friends">Friends</option>
-                </select>
-              </label>
-              <button
-                className="primary"
-                disabled={locked}
-                onClick={() => save(form)}
-              >
+              <button className="primary" onClick={() => save(form)}>
                 Save entry
               </button>
             </div>
@@ -318,16 +315,14 @@ export default function TodayPage({ today, secondsLeft, journal }) {
             <div className="card-head">
               <span>LESSONS OF THE DAY</span>
             </div>
-            <p className="card-sub">
-              What did today teach you? One lesson per line works well.
-            </p>
             <textarea
+              ref={lessonsRef}
               className="lessons-input"
-              disabled={locked}
+              rows={2}
               maxLength={LESSONS_MAX}
               value={form.lessons}
               onChange={(e) => change("lessons", e.target.value)}
-              placeholder={"Rest is part of the work.\nAsk for help sooner."}
+              placeholder={"Lessons..."}
               aria-label="Lessons of the day"
             />
           </section>
@@ -343,17 +338,33 @@ export default function TodayPage({ today, secondsLeft, journal }) {
           <div className="card notes-card">
             <div className="card-head">
               <span>QUICK NOTES</span>
-              <span>{notes.length} today</span>
+              <span>
+                {notes.length}/{NOTES_PER_DAY} today
+              </span>
             </div>
             <form onSubmit={handleAddNote}>
-              <input
-                disabled={locked}
+              <textarea
+                ref={noteRef}
+                rows={1}
+                maxLength={NOTE_MAX}
+                disabled={notesFull}
                 value={noteText}
                 onChange={(e) => setNoteText(e.target.value)}
-                placeholder="Capture a moment..."
+                // Enter adds the note; Shift+Enter starts a new line.
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    e.currentTarget.form.requestSubmit();
+                  }
+                }}
+                placeholder={
+                  notesFull
+                    ? `That’s ${NOTES_PER_DAY} notes for today.`
+                    : "Capture a moment..."
+                }
                 aria-label="New note"
               />
-              <button disabled={locked} aria-label="Add note">
+              <button aria-label="Add note" disabled={notesFull}>
                 ＋
               </button>
             </form>
@@ -371,19 +382,17 @@ export default function TodayPage({ today, secondsLeft, journal }) {
                         })}
                       </small>
                     </div>
-                    {!locked && (
-                      <button
-                        className="icon-button"
-                        aria-label="Delete note"
-                        onClick={() =>
-                          removeNote(entry.id, item.id).catch((e) =>
-                            setProblem(e.message),
-                          )
-                        }
-                      >
-                        ×
-                      </button>
-                    )}
+                    <button
+                      className="icon-button"
+                      aria-label="Delete note"
+                      onClick={() =>
+                        removeNote(entry.id, item.id).catch((e) =>
+                          setProblem(e.message),
+                        )
+                      }
+                    >
+                      ×
+                    </button>
                   </div>
                 ))
               ) : (
@@ -394,74 +403,40 @@ export default function TodayPage({ today, secondsLeft, journal }) {
 
           <div className="card media-card">
             <div className="card-head">
-              <span>MEDIA</span>
-              <span>{media.length} added</span>
+              <span>PHOTO OF THE DAY</span>
             </div>
-            <label
-              className={`upload ${locked || uploading ? "disabled" : ""}`}
-            >
-              <input
-                disabled={locked || uploading}
-                type="file"
-                accept="image/*,video/*"
-                multiple
-                onChange={handleFiles}
-              />
-              <span>{uploading ? "…" : "＋"}</span>
-              <strong>
-                {uploading ? "Uploading" : "Add a photo or video"}
-              </strong>
-              <small>Up to 50 MB each</small>
-            </label>
-            {media.length > 0 && (
-              <div className="media-grid">
-                {media.map((item) => (
-                  <div className="media-item" key={item.id}>
-                    {item.mime_type.startsWith("video") ? (
-                      <video src={item.url || undefined} controls />
-                    ) : (
-                      <img src={item.url || undefined} alt={item.file_name} />
-                    )}
-                    {!locked && (
-                      <button
-                        className="icon-button media-remove"
-                        aria-label={`Remove ${item.file_name}`}
-                        onClick={() =>
-                          removeMedia(entry.id, item.id).catch((e) =>
-                            setProblem(e.message),
-                          )
-                        }
-                      >
-                        ×
-                      </button>
-                    )}
-                  </div>
-                ))}
+            {photo ? (
+              <div className="media-item day-photo">
+                <img src={photo.url || undefined} alt={photo.file_name} />
+                <button
+                  className="icon-button media-remove"
+                  aria-label={`Remove ${photo.file_name}`}
+                  onClick={() =>
+                    removeMedia(entry.id, photo.id).catch((e) =>
+                      setProblem(e.message),
+                    )
+                  }
+                >
+                  ×
+                </button>
               </div>
+            ) : (
+              <label className={`upload ${uploading ? "disabled" : ""}`}>
+                <input
+                  disabled={uploading}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFile}
+                />
+                <span>{uploading ? "…" : "＋"}</span>
+                <strong>
+                  {uploading ? "Uploading" : "Add one photo that sums up today"}
+                </strong>
+                <small>Up to 50 MB</small>
+              </label>
             )}
           </div>
         </div>
-      </div>
-
-      <div className="bottom-row">
-        <div className="card reflection">
-          <span className="reflection-icon">◒</span>
-          <div>
-            <strong>End-of-day reflection</strong>
-            <p>
-              AI insights will live here later — patterns, habits, and gentle
-              suggestions based on your journal.
-            </p>
-          </div>
-          <span className="soon">COMING SOON</span>
-        </div>
-        <button
-          className="lock-button"
-          disabled={locked || !entry}
-          onClick={handleLock}
-        >
-          🔒 Lock entry early
-        </button>
       </div>
     </div>
   );

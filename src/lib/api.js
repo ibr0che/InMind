@@ -4,7 +4,7 @@
 const API_URL = import.meta.env.VITE_API_URL || "/api";
 const SESSION_KEY = "inmind-session";
 
-export class ApiError extends Error {
+class ApiError extends Error {
   constructor(message, status) {
     super(message);
     this.status = status;
@@ -96,7 +96,7 @@ async function request(path, init = {}, retry = true) {
   if (response.status === 204) return null;
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw new ApiError(data.error || "Something went wrong.", response.status);
+    throw new ApiError(data.error || `Something went wrong (${response.status}).`, response.status);
   }
   return data;
 }
@@ -107,11 +107,11 @@ export const api = {
   signup: (payload) => request("/auth/signup", { method: "POST", json: payload, skipAuth: true }),
   login: (payload) => request("/auth/login", { method: "POST", json: payload, skipAuth: true }),
   me: () => request("/auth/me"),
+  updateMe: (fields) => request("/auth/me", { method: "PATCH", json: fields }),
 
   listEntries: () => request("/entries"),
   createEntry: (fields) => request("/entries", { method: "POST", json: fields }),
   updateEntry: (id, fields) => request(`/entries/${id}`, { method: "PATCH", json: fields }),
-  lockEntry: (id) => request(`/entries/${id}/lock`, { method: "POST" }),
 
   addNote: (entryId, text) => request(`/entries/${entryId}/notes`, { method: "POST", json: { text } }),
   deleteNote: (id) => request(`/notes/${id}`, { method: "DELETE" }),

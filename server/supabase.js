@@ -4,9 +4,9 @@ import dotenv from "dotenv";
 import { createClient } from "@supabase/supabase-js";
 
 // Resolve .env relative to THIS file, not the folder you launched node from.
-// This file is backend/src/config/supabase.js, so backend/.env is two levels up.
+// This file is server/supabase.js, so the project .env is one level up.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config({ path: path.resolve(__dirname, "/.env") });
+dotenv.config({ path: path.resolve(__dirname, "../.env") });
 
 export function requireEnvironment() {
   const required = ["SUPABASE_URL", "SUPABASE_PUBLISHABLE_KEY"];

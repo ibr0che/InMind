@@ -2,7 +2,6 @@ import { useMemo, useState } from "react";
 import AuthScreen from "./components/AuthScreen.jsx";
 import TodayPage from "./pages/TodayPage.jsx";
 import MemoriesPage from "./pages/MemoriesPage.jsx";
-import FriendsPage from "./pages/FriendsPage.jsx";
 import ProfilePage from "./pages/ProfilePage.jsx";
 import { useAuth } from "./hooks/useAuth.js";
 import { useTheme } from "./hooks/useThemes.js";
@@ -10,10 +9,11 @@ import { useClock } from "./hooks/useClock.js";
 import { useEntries } from "./hooks/useEntries.js";
 import { DEFAULT_TIMEZONE, computeStreak } from "./lib/dates.js";
 
+import logo from "./images/logo.png";
+
 const VIEWS = [
   { id: "journal", icon: "✎", label: "Today" },
   { id: "memories", icon: "▣", label: "Memories" },
-  { id: "friends", icon: "♧", label: "Friends" },
   { id: "profile", icon: "◍", label: "Profile" },
 ];
 
@@ -42,16 +42,16 @@ export default function App() {
       user={auth.user}
       profile={auth.profile}
       onLogout={auth.logout}
+      onRename={auth.updateUsername}
       appearance={appearance}
     />
   );
 }
 
 // Mounted only while signed in, so data loads after login and is discarded on logout.
-function Journal({ user, profile, onLogout }) {
+function Journal({ user, profile, onLogout, onRename, appearance }) {
   const [view, setView] = useState("journal");
   const journal = useEntries();
-  const appearance = useTheme();
 
   const timezone = user.user_metadata?.timezone || DEFAULT_TIMEZONE;
   const { today, secondsLeft } = useClock(timezone);
@@ -79,25 +79,13 @@ function Journal({ user, profile, onLogout }) {
     <div className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <span className="brand-mark">
-            <img
-              src="src/images/logo.png"
-              alt="Logo"
-              width={50}
-              height={50}
-              style={{
-                borderRadius: "70%",
-                objectFit: "fill",
-              }}
-            />
-          </span>
+          <img className="brand-logo" src={logo} alt="" />
           <div>
-            <strong>daymark</strong>
+            <strong>InMind</strong>
             <small>your life, remembered</small>
           </div>
         </div>
         <div className="top-actions">
-          <span className="local-pill">● synced</span>
           <button className="link-button" onClick={onLogout}>
             Sign out
           </button>
@@ -112,7 +100,6 @@ function Journal({ user, profile, onLogout }) {
             <div className="profile-avatar">{initials}</div>
             <div>
               <strong>{name}'s journal</strong>
-              <span>Started {started}</span>
             </div>
           </div>
           <nav>
@@ -139,9 +126,6 @@ function Journal({ user, profile, onLogout }) {
                 </small>
               </div>
             </div>
-            <div className="privacy-note">
-              ⌁ <span>Your entries are yours. Always.</span>
-            </div>
           </div>
         </aside>
         <section className="content">
@@ -153,9 +137,8 @@ function Journal({ user, profile, onLogout }) {
             />
           )}
           {view === "memories" && (
-            <MemoriesPage journal={journal} today={today} />
+            <MemoriesPage journal={journal} />
           )}
-          {view === "friends" && <FriendsPage />}
           {view === "profile" && (
             <ProfilePage
               user={user}
@@ -164,6 +147,7 @@ function Journal({ user, profile, onLogout }) {
               timezone={timezone}
               appearance={appearance}
               onLogout={onLogout}
+              onRename={onRename}
             />
           )}
         </section>

@@ -1,4 +1,4 @@
-# Daymark API
+# InMind API
 
 Protected routes require:
 
@@ -11,9 +11,10 @@ Content-Type: application/json
 
 | Method | Route | Purpose |
 |---|---|---|
-| POST | `/api/auth/signup` | Create a Supabase account and Daymark profile |
+| POST | `/api/auth/signup` | Create a Supabase account and InMind profile |
 | POST | `/api/auth/login` | Return a Supabase session |
 | GET | `/api/auth/me` | Return the current user and profile |
+| PATCH | `/api/auth/me` | Change the username: `{ "username": "jordan" }` (3–30 of `a-z A-Z 0-9 _ . -`; 409 if taken) |
 
 Signup body:
 
@@ -34,7 +35,6 @@ Signup body:
 | GET | `/api/entries?date=2026-11-03` | Get one date |
 | POST | `/api/entries` | Create an entry |
 | PATCH | `/api/entries/:id` | Edit an unlocked entry |
-| POST | `/api/entries/:id/lock` | Lock an entry permanently |
 | DELETE | `/api/entries/:id` | Delete an unlocked entry |
 
 Create body:
@@ -43,22 +43,21 @@ Create body:
 {
   "entry_date": "2026-11-03",
   "title": "A regular day",
-  "body": "Today I worked on Daymark.",
-  "mood": "Good",
-  "visibility": "private"
+  "body": "Today I worked on InMind.",
+  "mood": "Good"
 }
 ```
 
-## Notes and media metadata
+## Notes and photo
 
 | Method | Route | Purpose |
 |---|---|---|
 | POST | `/api/entries/:entryId/notes` | Add a timestamped note |
 | DELETE | `/api/notes/:id` | Delete a note |
-| POST | `/api/entries/:entryId/media` | Save metadata after a Storage upload |
+| POST | `/api/entries/:entryId/media/upload` | Upload the day's one photo (raw `image/*` body, name in `X-File-Name`, 50 MB max; 409 if the day already has one) |
 | DELETE | `/api/media/:id` | Delete the Storage object and metadata |
 
-The actual file upload should go to the private `journal-media` Supabase Storage bucket. Use a path beginning with the authenticated user's ID, such as:
+Notes are up to 100 characters, 10 per day. The server stores the photo in the private `journal-media` Supabase Storage bucket at:
 
 ```text
 <user-id>/<entry-id>/<file-name>

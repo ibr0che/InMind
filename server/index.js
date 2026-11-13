@@ -61,13 +61,13 @@ function todayInUserTimezone(user) {
   }
 }
 
-// Entries are only editable on their own day (in the user's timezone) and
-// until they are manually locked. This is the server-side source of truth, so
+// Entries are only editable on their own day (in the user's timezone);
+// they lock at midnight. This is the server-side source of truth, so
 // a stale or tampered client cannot edit a past day.
 async function loadEditableEntry(req, res, entryId) {
   const { data, error } = await req.supabase
     .from("entries")
-    .select("id, entry_date, locked")
+    .select("id, entry_date")
     .eq("id", entryId)
     .eq("user_id", req.user.id)
     .maybeSingle();
@@ -79,7 +79,7 @@ async function loadEditableEntry(req, res, entryId) {
     res.status(404).json({ error: "Entry not found." });
     return null;
   }
-  if (data.locked || data.entry_date !== todayInUserTimezone(req.user)) {
+  if (data.entry_date !== todayInUserTimezone(req.user)) {
     res.status(423).json({ error: "This entry is locked." });
     return null;
   }
@@ -87,7 +87,7 @@ async function loadEditableEntry(req, res, entryId) {
 }
 
 // The media bucket is private, so the client needs short-lived signed URLs to
-// display photos and videos. Adds a `url` field to every media row.
+// display photos. Adds a `url` field to every media row.
 async function withMediaUrls(supabase, entries) {
   const list = Array.isArray(entries) ? entries : [entries];
   const paths = list.flatMap((entry) =>
@@ -106,9 +106,14 @@ async function withMediaUrls(supabase, entries) {
   return entries;
 }
 
-const TEXT_LIMITS = { title: 200, body: 20000, highlight: 280, lessons: 5000 };
+const TEXT_LIMITS = { title: 25, body: 2500, highlight: 280, lessons: 100 };
+const NOTE_MAX_CHARS = 100;
+const NOTES_PER_DAY = 10;
+// Shared by sign-up and the username change, so both accept the same names.
+const USERNAME = /^[a-zA-Z0-9_.-]{3,30}$/;
+const USERNAME_RULE =
+  "Usernames are 3–30 letters, numbers, dots, dashes or underscores.";
 const MOODS = ["Great", "Good", "Okay", "Low", "Rough"];
-const VISIBILITIES = ["private", "friends"];
 
 // Returns { value } holding only known, valid fields, or { error } with a message safe to show.
 // Unknown keys (locked, user_id, ...) are ignored, so a client can't set them.
@@ -127,11 +132,6 @@ function parseEntryFields(input = {}) {
       return { error: "Choose a mood from the list." };
     value.mood = input.mood;
   }
-  if (input.visibility !== undefined) {
-    if (!VISIBILITIES.includes(input.visibility))
-      return { error: "Choose who can see this entry." };
-    value.visibility = input.visibility;
-  }
   return { value };
 }
 
@@ -143,16 +143,14 @@ app.get("/", (_req, res) => res.json({ ok: true, service: "inmind-api" }));
 
 app.post("/api/auth/signup", async (req, res, next) => {
   try {
-    const {
-      email,
-      password,
-      username,
-      timezone = "America/Los_Angeles",
-    } = req.body;
+    const { email, password, timezone = "America/Los_Angeles" } = req.body;
+    const username = req.body.username?.trim();
     if (!email || !password || !username)
       return res
         .status(400)
         .json({ error: "Email, password, and username are required." });
+    if (!USERNAME.test(username))
+      return res.status(400).json({ error: USERNAME_RULE });
     const supabase = createUserClient();
     const { data, error } = await supabase.auth.signUp({
       email,
@@ -242,6 +240,43 @@ app.get("/api/auth/me", requireUser, async (req, res) => {
   });
 });
 
+// Change the signed-in user's username. Updates the profile row (what the app
+// shows) and the auth metadata (the fallback), so the two never disagree.
+app.patch("/api/auth/me", requireUser, async (req, res, next) => {
+  try {
+    const username = req.body?.username?.trim();
+    if (!USERNAME.test(username || ""))
+      return res.status(400).json({ error: USERNAME_RULE });
+    const { data, error } = await req.supabase
+      .from("profiles")
+      .update({ username })
+      .eq("id", req.user.id)
+      .select()
+      .maybeSingle();
+    if (error)
+      return res.status(error.code === "23505" ? 409 : 400).json({
+        error:
+          error.code === "23505" ? "That username is taken." : error.message,
+      });
+    // No row back means no profile, or row-level security blocked the update.
+    if (!data)
+      return res.status(404).json({ error: "Couldn't update your profile." });
+    // supabase-js can't update a user without a stored session, so call the Auth REST API directly.
+    await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
+      method: "PUT",
+      headers: {
+        apikey: process.env.SUPABASE_PUBLISHABLE_KEY,
+        Authorization: req.headers.authorization,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ data: { username } }),
+    });
+    res.json({ profile: data });
+  } catch (error) {
+    next(error);
+  }
+});
+
 /* ---------- entries ---------- */
 
 app.get("/api/entries", requireUser, async (req, res, next) => {
@@ -314,7 +349,6 @@ app.patch("/api/entries/:id", requireUser, async (req, res, next) => {
       .eq("id", req.params.id)
       .eq("user_id", req.user.id)
       .eq("entry_date", todayInUserTimezone(req.user))
-      .eq("locked", false)
       .select("*, notes(*), media(*)")
       .single();
     if (error)
@@ -331,33 +365,6 @@ app.patch("/api/entries/:id", requireUser, async (req, res, next) => {
   }
 });
 
-app.post("/api/entries/:id/lock", requireUser, async (req, res, next) => {
-  try {
-    const { data, error } = await req.supabase
-      .from("entries")
-      .update({
-        locked: true,
-        locked_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", req.params.id)
-      .eq("user_id", req.user.id)
-      .eq("locked", false)
-      .select()
-      .single();
-    if (error)
-      return res.status(error.code === "PGRST116" ? 423 : 400).json({
-        error:
-          error.code === "PGRST116"
-            ? "Entry is already locked or does not exist."
-            : error.message,
-      });
-    res.json({ entry: data });
-  } catch (error) {
-    next(error);
-  }
-});
-
 app.delete("/api/entries/:id", requireUser, async (req, res, next) => {
   try {
     const { error } = await req.supabase
@@ -365,8 +372,7 @@ app.delete("/api/entries/:id", requireUser, async (req, res, next) => {
       .delete()
       .eq("id", req.params.id)
       .eq("user_id", req.user.id)
-      .eq("entry_date", todayInUserTimezone(req.user))
-      .eq("locked", false);
+      .eq("entry_date", todayInUserTimezone(req.user));
     if (error) return res.status(400).json({ error: error.message });
     res.status(204).send();
   } catch (error) {
@@ -378,16 +384,29 @@ app.delete("/api/entries/:id", requireUser, async (req, res, next) => {
 
 app.post("/api/entries/:entryId/notes", requireUser, async (req, res, next) => {
   try {
-    if (!req.body.text?.trim())
-      return res.status(400).json({ error: "Note text is required." });
+    const text = typeof req.body.text === "string" ? req.body.text.trim() : "";
+    if (!text) return res.status(400).json({ error: "Note text is required." });
+    if (text.length > NOTE_MAX_CHARS)
+      return res
+        .status(400)
+        .json({ error: `Notes can be up to ${NOTE_MAX_CHARS} characters.` });
     const entry = await loadEditableEntry(req, res, req.params.entryId);
     if (!entry) return;
+    const { count, error: countError } = await req.supabase
+      .from("notes")
+      .select("id", { count: "exact", head: true })
+      .eq("entry_id", entry.id);
+    if (countError) return res.status(400).json({ error: countError.message });
+    if (count >= NOTES_PER_DAY)
+      return res
+        .status(400)
+        .json({ error: `You can add up to ${NOTES_PER_DAY} notes a day.` });
     const { data, error } = await req.supabase
       .from("notes")
       .insert({
         entry_id: entry.id,
         user_id: req.user.id,
-        text: req.body.text.trim(),
+        text,
       })
       .select()
       .single();
@@ -425,22 +444,36 @@ app.delete("/api/notes/:id", requireUser, async (req, res, next) => {
 
 /* ---------- media ---------- */
 
-// Raw file upload: the browser sends the file bytes as the request body
-// (Content-Type: image/* or video/*) with the original name in X-File-Name.
+// One photo per day. Raw file upload: the browser sends the image bytes as the
+// request body (Content-Type: image/*) with the original name in X-File-Name.
 // The server stores the file in Supabase Storage and records the metadata.
 app.post(
   "/api/entries/:entryId/media/upload",
   requireUser,
-  express.raw({ type: ["image/*", "video/*"], limit: MAX_MEDIA_BYTES }),
+  express.raw({ type: "image/*", limit: MAX_MEDIA_BYTES }),
   async (req, res, next) => {
     try {
       const mimeType = (req.headers["content-type"] || "").split(";")[0];
-      if (!Buffer.isBuffer(req.body) || !req.body.length)
+      if (
+        !mimeType.startsWith("image/") ||
+        !Buffer.isBuffer(req.body) ||
+        !req.body.length
+      )
         return res
           .status(400)
-          .json({ error: "Send a photo or video as the request body." });
+          .json({ error: "Send a photo as the request body." });
       const entry = await loadEditableEntry(req, res, req.params.entryId);
       if (!entry) return;
+      const { count, error: countError } = await req.supabase
+        .from("media")
+        .select("id", { count: "exact", head: true })
+        .eq("entry_id", entry.id);
+      if (countError)
+        return res.status(400).json({ error: countError.message });
+      if (count > 0)
+        return res
+          .status(409)
+          .json({ error: "This day already has a photo. Remove it first." });
 
       let fileName = "upload";
       try {
@@ -488,35 +521,6 @@ app.post(
   },
 );
 
-// Metadata-only route, kept for clients that upload to Storage themselves.
-app.post("/api/entries/:entryId/media", requireUser, async (req, res, next) => {
-  try {
-    const { storage_path, file_name, mime_type, size_bytes = null } = req.body;
-    if (!storage_path || !file_name || !mime_type)
-      return res.status(400).json({
-        error: "storage_path, file_name, and mime_type are required.",
-      });
-    const entry = await loadEditableEntry(req, res, req.params.entryId);
-    if (!entry) return;
-    const { data, error } = await req.supabase
-      .from("media")
-      .insert({
-        entry_id: entry.id,
-        user_id: req.user.id,
-        storage_path,
-        file_name,
-        mime_type,
-        size_bytes,
-      })
-      .select()
-      .single();
-    if (error) return res.status(400).json({ error: error.message });
-    res.status(201).json({ media: data });
-  } catch (error) {
-    next(error);
-  }
-});
-
 app.delete("/api/media/:id", requireUser, async (req, res, next) => {
   try {
     const { data: media, error: lookupError } = await req.supabase
@@ -552,7 +556,7 @@ app.use((error, _req, res, _next) => {
   if (error.type === "entity.too.large")
     return res
       .status(413)
-      .json({ error: "That file is too large (50 MB max)." });
+      .json({ error: "That photo is too large (50 MB max)." });
   if (error.status && error.status < 500)
     return res.status(error.status).json({ error: error.message });
   console.error(error);
@@ -560,19 +564,3 @@ app.use((error, _req, res, _next) => {
 });
 
 app.listen(port, () => console.log(`API running on http://localhost:${port}`));
-
-// A limiter that limits the amount of times someone can attempt a login
-//
-// import rateLimit from "express-rate-limit";
-
-// const authLimiter = rateLimit({
-//   windowMs: 15 * 60 * 1000,
-//   limit: 10,
-//   standardHeaders: true,
-//   legacyHeaders: false,
-//   message: { error: "Too many attempts. Try again in a few minutes." },
-// });
-
-// app.use("/api/auth/login", authLimiter);
-// app.use("/api/auth/signup", authLimiter);
-// app.use("/api/auth/refresh", authLimiter);

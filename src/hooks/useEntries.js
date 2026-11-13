@@ -92,11 +92,6 @@ export function useEntries() {
     return entry;
   };
 
-  const lock = async (id) => {
-    const { entry } = await api.lockEntry(id);
-    merge(entry);
-  };
-
   const addNote = async (entryId, text) => {
     const { note } = await api.addNote(entryId, text);
     patch(entryId, (item) => ({ ...item, notes: [...(item.notes || []), note] }));
@@ -117,5 +112,5 @@ export function useEntries() {
     patch(entryId, (item) => ({ ...item, media: item.media.filter((media) => media.id !== mediaId) }));
   };
 
-  return { entries, status, error, reload: load, saveToday, lock, addNote, removeNote, addMedia, removeMedia };
+  return { entries, status, error, reload: load, saveToday, addNote, removeNote, addMedia, removeMedia };
 }

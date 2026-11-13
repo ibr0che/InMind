@@ -1,11 +1,11 @@
 {
-  "name": "daymark-journal",
+  "name": "inmind-journal",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "concurrently \"npm run server\" \"npm run client\"",
-    "server": "node server/index.js",
+    "server": "node --watch server/index.js",
     "client": "vite --host 0.0.0.0",
     "build": "vite build",
     "start": "node server/index.js"

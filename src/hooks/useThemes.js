@@ -1,39 +1,30 @@
 import { useEffect, useState } from "react";
 
-const read = (key, fallback) => {
-  try {
-    return localStorage.getItem(key) || fallback;
-  } catch {
-    return fallback;
-  }
-};
-const write = (key, value) => {
-  try {
-    localStorage.setItem(key, value);
-  } catch {
-    /* private mode: skip */
-  }
-};
+// Every theme is dark. Colors live in styles.css under [data-theme="…"].
+export const THEMES = ["sand", "violet", "rainforest", "red", "blue", "orange"];
+const KEY = "inmind-theme";
 
-const systemDark = window.matchMedia("(prefers-color-scheme: dark)");
+const stored = () => {
+  try {
+    return localStorage.getItem(KEY);
+  } catch {
+    return null;
+  }
+};
 
 export function useTheme() {
-  const [theme, setTheme] = useState(() => read("daymark-theme", "sand"));
-  const [mode, setMode] = useState(() => read("daymark-mode", "system")); // light | dark | system
+  const [theme, setTheme] = useState(() =>
+    THEMES.includes(stored()) ? stored() : THEMES[0],
+  );
 
   useEffect(() => {
-    const apply = () => {
-      const root = document.documentElement;
-      root.dataset.theme = theme;
-      root.dataset.mode =
-        mode === "system" ? (systemDark.matches ? "dark" : "light") : mode;
-    };
-    apply();
-    write("daymark-theme", theme);
-    write("daymark-mode", mode);
-    systemDark.addEventListener("change", apply); // follow the OS when mode is "system"
-    return () => systemDark.removeEventListener("change", apply);
-  }, [theme, mode]);
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem(KEY, theme);
+    } catch {
+      /* private mode: the choice just won't survive a reload */
+    }
+  }, [theme]);
 
-  return { theme, setTheme, mode, setMode };
+  return { theme, setTheme };
 }

@@ -64,5 +64,13 @@ export function useAuth() {
     setState(SIGNED_OUT);
   }, []);
 
-  return { ...state, login, signup, logout, retry: bootstrap };
+  const updateUsername = useCallback(
+    async (username) => {
+      await api.updateMe({ username });
+      await loadMe(); // the server may have refreshed metadata too
+    },
+    [loadMe],
+  );
+
+  return { ...state, login, signup, logout, updateUsername, retry: bootstrap };
 }

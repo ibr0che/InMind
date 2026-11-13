@@ -1,31 +1,5 @@
-const THEMES = [
-  { id: "sand", label: "Sand" },
-  { id: "violet", label: "Violet" },
-  { id: "rainforest", label: "Rainforest" },
-];
-const MODES = [
-  { id: "system", label: "System" },
-  { id: "light", label: "Light" },
-  { id: "dark", label: "Dark" },
-];
-
-function Setting({ label, hint, value, onChange, options }) {
-  return (
-    <label className="setting-row">
-      <span>
-        {label}
-        <small>{hint}</small>
-      </span>
-      <select value={value} onChange={(e) => onChange(e.target.value)}>
-        {options.map((o) => (
-          <option key={o.id} value={o.id}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
+import { useState } from "react";
+import { THEMES } from "../hooks/useThemes.js";
 
 export default function ProfilePage({
   user,
@@ -34,8 +8,9 @@ export default function ProfilePage({
   timezone,
   appearance,
   onLogout,
+  onRename,
 }) {
-  const { theme, setTheme, mode, setMode } = appearance;
+  const { theme, setTheme } = appearance;
 
   return (
     <div className="simple-page">
@@ -43,28 +18,35 @@ export default function ProfilePage({
       <h1>Profile</h1>
 
       <section className="card settings-card">
-        <h2>Appearance</h2>
-        <Setting
-          label="Theme"
-          hint="The color palette"
-          value={theme}
-          onChange={setTheme}
-          options={THEMES}
-        />
-        <Setting
-          label="Mode"
-          hint="System follows your device"
-          value={mode}
-          onChange={setMode}
-          options={MODES}
-        />
+        <div className="card-head">
+          <span>THEME</span>
+        </div>
+        <div className="swatches">
+          {THEMES.map((id) => (
+            // data-theme gives the swatch that theme's own --accent (see styles.css)
+            <button
+              key={id}
+              data-theme={id}
+              className="swatch"
+              aria-pressed={theme === id}
+              onClick={() => setTheme(id)}
+            >
+              <span className="swatch-dot" />
+              {id}
+            </button>
+          ))}
+        </div>
       </section>
 
       <section className="card settings-card">
-        <h2>Account</h2>
+        <div className="card-head">
+          <span>ACCOUNT</span>
+        </div>
         <dl className="account-list">
           <dt>Username</dt>
-          <dd>{name}</dd>
+          <dd>
+            <UsernameField name={name} onRename={onRename} />
+          </dd>
           <dt>Email</dt>
           <dd>{user.email}</dd>
           <dt>Timezone</dt>
@@ -72,10 +54,70 @@ export default function ProfilePage({
           <dt>Member since</dt>
           <dd>{started}</dd>
         </dl>
-        <button className="lock-button" onClick={onLogout}>
+        <button className="outline-button" onClick={onLogout}>
           Sign out
         </button>
       </section>
     </div>
+  );
+}
+
+function UsernameField({ name, onRename }) {
+  const [draft, setDraft] = useState(null); // null = not editing
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  if (draft === null) {
+    return (
+      <span className="username-view">
+        {name}
+        <button className="link-button" onClick={() => setDraft(name)}>
+          Edit
+        </button>
+      </span>
+    );
+  }
+
+  async function save(event) {
+    event.preventDefault();
+    setBusy(true);
+    setError("");
+    try {
+      await onRename(draft.trim());
+      setDraft(null);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form className="username-form" onSubmit={save}>
+      <div className="username-row">
+        <input
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => e.key === "Escape" && setDraft(null)}
+          minLength={3}
+          maxLength={30}
+          pattern="[a-zA-Z0-9_.\-]+"
+          title="Letters, numbers, dots, dashes or underscores"
+          aria-label="New username"
+        />
+        <button className="primary" disabled={busy || draft.trim() === name}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+        <button
+          type="button"
+          className="link-button"
+          onClick={() => setDraft(null)}
+        >
+          Cancel
+        </button>
+      </div>
+      {error && <p className="inline-error">{error}</p>}
+    </form>
   );
 }

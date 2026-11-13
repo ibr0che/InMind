@@ -1,4 +1,5 @@
 import { useState } from "react";
+import logo from "../images/logo.png";
 
 export default function AuthScreen({ onLogin, onSignup }) {
   const [mode, setMode] = useState("login");
@@ -42,9 +43,9 @@ export default function AuthScreen({ onLogin, onSignup }) {
     <div className="auth-shell">
       <form className="card auth-card" onSubmit={submit}>
         <div className="brand">
-          <span className="brand-mark">✦</span>
+          <img className="brand-logo" src={logo} alt="" />
           <div>
-            <strong>daymark</strong>
+            <strong>InMind</strong>
             <small>your life, remembered</small>
           </div>
         </div>
@@ -54,7 +55,16 @@ export default function AuthScreen({ onLogin, onSignup }) {
         {!isLogin && (
           <label className="field">
             Username
-            <input required autoComplete="username" value={form.username} onChange={update("username")} />
+            <input
+              required
+              autoComplete="username"
+              minLength={3}
+              maxLength={30}
+              pattern="[a-zA-Z0-9_.\-]+"
+              title="3–30 letters, numbers, dots, dashes or underscores"
+              value={form.username}
+              onChange={update("username")}
+            />
           </label>
         )}
         <label className="field">

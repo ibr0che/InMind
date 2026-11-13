@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { longDate } from "../lib/dates.js";
+import { useEffect, useRef, useState } from "react";
+import { longDate, shortDate } from "../lib/dates.js";
 
 // One lesson per line. Strip any bullet or number the person typed so the
 // list doesn't show a double marker.
@@ -9,12 +9,16 @@ const lessonLines = (text = "") =>
     .map((line) => line.replace(/^\s*(?:[-*•–]|\d+[.)])\s*/, "").trim())
     .filter(Boolean);
 
-export default function MemoriesPage({ journal, today }) {
+const timeOf = (iso) =>
+  new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+
+export default function MemoriesPage({ journal }) {
   const { entries, status, error, reload } = journal;
   const [openId, setOpenId] = useState(null);
+  const open = entries.find((entry) => entry.id === openId) || null;
 
   return (
-    <div className="simple-page">
+    <div className="memories">
       <p className="eyebrow">YOUR ARCHIVE</p>
       <h1>Memories</h1>
 
@@ -34,130 +38,169 @@ export default function MemoriesPage({ journal, today }) {
           <span>▣</span>
           <h2>Your story is just beginning.</h2>
           <p>
-            As you write more days, this space will become a searchable timeline
-            of the life you want to remember.
+            As you write more days, this space will fill up with the life you
+            want to remember.
           </p>
         </div>
       )}
 
       {status === "ready" && entries.length > 0 && (
-        <div className="memory-list">
-          {entries.map((entry) => {
-            const open = openId === entry.id;
-            const sealed = entry.locked || entry.entry_date !== today;
-            const lessons = lessonLines(entry.lessons);
-            return (
-              <article className="card memory" key={entry.id}>
-                <button
-                  className="memory-head"
-                  aria-expanded={open}
-                  onClick={() => setOpenId(open ? null : entry.id)}
-                >
-                  <span className="memory-date">
-                    {longDate(entry.entry_date)}
-                  </span>
-                  <span className="memory-title">
-                    {entry.title || "Untitled day"}
-                  </span>
-                  <span className="memory-meta">
-                    <span className="chip">{entry.mood}</span>
-                    <span className="chip">
-                      {entry.visibility === "friends" ? "Friends" : "Only me"}
-                    </span>
-                    {lessons.length > 0 && (
-                      <span className="chip">
-                        {lessons.length}{" "}
-                        {lessons.length === 1 ? "lesson" : "lessons"}
-                      </span>
-                    )}
-                    {sealed && <span className="chip">Locked</span>}
-                  </span>
-                </button>
-
-                {/* The highlight is the headline of the day, so it shows whether or not the card is open. */}
-                {entry.highlight && (
-                  <p className="memory-highlight">
-                    <span aria-hidden="true">☼</span>
-                    {entry.highlight}
-                  </p>
-                )}
-
-                {!open && entry.body && (
-                  <p className="memory-excerpt">{entry.body}</p>
-                )}
-
-                {open && (
-                  <div className="memory-detail">
-                    {entry.body && (
-                      <>
-                        <p className="memory-label">JOURNAL</p>
-                        <p className="memory-body">{entry.body}</p>
-                      </>
-                    )}
-                    {!entry.body && lessons.length === 0 && (
-                      <p className="empty">No writing for this day.</p>
-                    )}
-
-                    {lessons.length > 0 && (
-                      <>
-                        <p className="memory-label">LESSONS OF THE DAY</p>
-                        <ul className="memory-lessons">
-                          {lessons.map((line, index) => (
-                            <li key={index}>{line}</li>
-                          ))}
-                        </ul>
-                      </>
-                    )}
-
-                    {entry.notes?.length > 0 && (
-                      <>
-                        <p className="memory-label">QUICK NOTES</p>
-                        <ul className="memory-notes">
-                          {[...entry.notes]
-                            .sort((a, b) =>
-                              a.created_at.localeCompare(b.created_at),
-                            )
-                            .map((note) => (
-                              <li key={note.id}>
-                                <small>
-                                  {new Date(note.created_at).toLocaleTimeString(
-                                    [],
-                                    {
-                                      hour: "numeric",
-                                      minute: "2-digit",
-                                    },
-                                  )}
-                                </small>
-                                {note.text}
-                              </li>
-                            ))}
-                        </ul>
-                      </>
-                    )}
-
-                    {entry.media?.length > 0 && (
-                      <div className="media-grid memory-media">
-                        {entry.media.map((item) => (
-                          <div className="media-item" key={item.id}>
-                            {item.mime_type.startsWith("video") ? (
-                              <video src={item.url || undefined} controls />
-                            ) : (
-                              <img
-                                src={item.url || undefined}
-                                alt={item.file_name}
-                              />
-                            )}
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </article>
-            );
-          })}
+        <div className="memory-grid">
+          {entries.map((entry) => (
+            <button
+              key={entry.id}
+              className="pad"
+              onClick={() => setOpenId(entry.id)}
+            >
+              <span className="pad-date">{shortDate(entry.entry_date)}</span>
+              <span className="pad-title">{entry.title || "Untitled day"}</span>
+              <span className="chip">{entry.mood}</span>
+            </button>
+          ))}
         </div>
       )}
+
+      {open && (
+        <MemoryDialog
+          entry={open}
+          onClose={() => setOpenId(null)}
+        />
+      )}
     </div>
+  );
+}
+
+// The opened pad. A native modal <dialog> gives Escape-to-close and keeps
+// keyboard focus inside it for free.
+function MemoryDialog({ entry, onClose }) {
+  const ref = useRef(null);
+  const [zoomed, setZoomed] = useState(false);
+  useEffect(() => {
+    ref.current?.showModal();
+  }, []);
+
+  const lessons = lessonLines(entry.lessons);
+  const notes = [...(entry.notes || [])].sort((a, b) =>
+    a.created_at.localeCompare(b.created_at),
+  );
+  // One photo per day; older entries may hold more (or videos), so show their first photo.
+  const photo = entry.media?.find((item) => item.mime_type.startsWith("image")) || null;
+
+  return (
+    <dialog
+      ref={ref}
+      className="pad-open"
+      onClose={onClose}
+      // a click on the dimmed backdrop lands on the <dialog> itself
+      onClick={(event) => event.target === ref.current && ref.current.close()}
+    >
+      <button
+        className="icon-button pad-close"
+        aria-label="Close"
+        onClick={() => ref.current.close()}
+      >
+        ×
+      </button>
+
+      {/* Same layout for every day: an empty part shows a quiet note instead of disappearing. */}
+      <div className="memory-layout">
+        <section className="memory-main">
+          <header className="memory-box">
+            <p className="pad-date">{longDate(entry.entry_date)}</p>
+            <h2 className="pad-open-title">{entry.title || "Untitled day"}</h2>
+            <div className="memory-meta">
+              <span className="chip">{entry.mood}</span>
+            </div>
+          </header>
+
+          <div className="memory-box memory-highlight">
+            <span aria-hidden="true">☼</span>
+            {entry.highlight || <span className="memory-empty">No highlight.</span>}
+          </div>
+
+          <div className="memory-box memory-entry">
+            <p className="memory-label">JOURNAL</p>
+            {entry.body ? (
+              <p className="memory-body">{entry.body}</p>
+            ) : (
+              <p className="memory-empty">No writing for this day.</p>
+            )}
+          </div>
+        </section>
+
+        <section className="memory-box memory-notes-box">
+          <p className="memory-label">QUICK NOTES</p>
+          {notes.length ? (
+            <ul className="memory-notes">
+              {notes.map((note) => (
+                <li key={note.id}>
+                  <small>{timeOf(note.created_at)}</small>
+                  {note.text}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="memory-empty">No notes.</p>
+          )}
+        </section>
+
+        {/* The photo fills its spot on its own (no box); the box only shows when there's none. */}
+        {photo ? (
+          <button
+            className="memory-media-box memory-photo-button"
+            aria-label="View photo full size"
+            onClick={() => setZoomed(true)}
+          >
+            <img className="memory-photo" src={photo.url || undefined} alt={photo.file_name} />
+          </button>
+        ) : (
+          <section className="memory-box memory-media-box">
+            <p className="memory-label">PHOTO OF THE DAY</p>
+            <p className="memory-empty">No photo.</p>
+          </section>
+        )}
+
+        <section className="memory-box memory-lessons-box">
+          <p className="memory-label">LESSONS OF THE DAY</p>
+          {lessons.length ? (
+            <ul className="memory-lessons">
+              {lessons.map((line, index) => (
+                <li key={index}>{line}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="memory-empty">No lessons.</p>
+          )}
+        </section>
+      </div>
+      {zoomed && photo && (
+        <PhotoViewer photo={photo} onClose={() => setZoomed(false)} />
+      )}
+    </dialog>
+  );
+}
+
+// Full-size photo over the open pad. It is its own modal <dialog>, so Escape
+// closes just this layer and returns to the memory underneath.
+function PhotoViewer({ photo, onClose }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    ref.current?.showModal();
+  }, []);
+
+  return (
+    <dialog
+      ref={ref}
+      className="photo-viewer"
+      // React passes "close" up to the memory's dialog too; stop it here so only the viewer closes
+      onClose={(event) => {
+        event.stopPropagation();
+        onClose();
+      }}
+      onClick={() => ref.current.close()} // a click anywhere closes it
+      aria-label="Photo of the day"
+    >
+      <img src={photo.url || undefined} alt={photo.file_name} />
+    </dialog>
   );
 }
