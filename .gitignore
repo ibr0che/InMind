@@ -64,3 +64,4 @@ Desktop.ini
 *.local
 tmp/
 temp/
+.claude/

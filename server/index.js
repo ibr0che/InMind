@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
+import compression from "compression";
 import { requireUser } from "./auth.js";
 import { createUserClient, requireEnvironment } from "./supabase.js";
 import rateLimit from "express-rate-limit";
@@ -18,6 +19,7 @@ const MAX_MEDIA_BYTES = 50 * 1024 * 1024; // matches Supabase's default per-file
 const SIGNED_URL_SECONDS = 60 * 60;
 
 app.use(helmet());
+app.use(compression());
 app.use(cors({ origin: clientOrigin }));
 app.use(express.json({ limit: "1mb" }));
 
@@ -51,57 +53,87 @@ app.use(
 
 /* ---------- helpers ---------- */
 
+const DEFAULT_TIMEZONE = "America/Los_Angeles";
+// Building an Intl formatter is the slow part, so keep one per timezone.
+const dateFormatters = new Map();
+function dateFormatter(timeZone) {
+  let formatter = dateFormatters.get(timeZone);
+  if (!formatter) {
+    formatter = new Intl.DateTimeFormat("en-CA", { timeZone }); // throws on bad zone
+    dateFormatters.set(timeZone, formatter);
+  }
+  return formatter;
+}
+
 function todayInUserTimezone(user) {
-  const format = (timeZone) =>
-    new Intl.DateTimeFormat("en-CA", { timeZone }).format(new Date());
+  const now = new Date();
   try {
-    return format(user.user_metadata?.timezone || "America/Los_Angeles");
+    return dateFormatter(user?.user_metadata?.timezone || DEFAULT_TIMEZONE).format(now);
   } catch {
-    return format("America/Los_Angeles");
+    return dateFormatter(DEFAULT_TIMEZONE).format(now);
   }
 }
 
 // Entries are only editable on their own day (in the user's timezone);
 // they lock at midnight. This is the server-side source of truth, so
 // a stale or tampered client cannot edit a past day.
-async function loadEditableEntry(req, res, entryId) {
-  const { data, error } = await req.supabase
+// `entry` is a row holding at least `entry_date`, or null if none was found.
+// Returns null when editable, otherwise { status, error } to send.
+function editProblem(req, entry, queryError) {
+  if (queryError) return { status: 400, error: queryError.message };
+  if (!entry) return { status: 404, error: "Entry not found." };
+  if (entry.entry_date !== todayInUserTimezone(req.user))
+    return { status: 423, error: "This entry is locked." };
+  return null;
+}
+
+function fetchEntryDate(req, entryId) {
+  return req.supabase
     .from("entries")
     .select("id, entry_date")
     .eq("id", entryId)
     .eq("user_id", req.user.id)
     .maybeSingle();
-  if (error) {
-    res.status(400).json({ error: error.message });
-    return null;
-  }
-  if (!data) {
-    res.status(404).json({ error: "Entry not found." });
-    return null;
-  }
-  if (data.entry_date !== todayInUserTimezone(req.user)) {
-    res.status(423).json({ error: "This entry is locked." });
-    return null;
-  }
-  return data;
 }
 
 // The media bucket is private, so the client needs short-lived signed URLs to
-// display photos. Adds a `url` field to every media row.
+// display photos. Signed URLs live for an hour; reuse one for up to 50 minutes
+// so repeat loads skip the Storage round trip. A path is only ever looked up
+// for rows the database (row-level security) already returned to this user.
+const URL_REUSE_MS = 50 * 60 * 1000;
+const URL_CACHE_MAX = 5000;
+const signedUrlCache = new Map(); // storage_path -> { url, expiresAt }
+
+function forgetSignedUrl(path) {
+  signedUrlCache.delete(path);
+}
+
+// Adds a `url` field to every media row.
 async function withMediaUrls(supabase, entries) {
   const list = Array.isArray(entries) ? entries : [entries];
-  const paths = list.flatMap((entry) =>
-    (entry.media || []).map((item) => item.storage_path),
-  );
-  if (!paths.length) return entries;
-  const { data } = await supabase.storage
-    .from(MEDIA_BUCKET)
-    .createSignedUrls(paths, SIGNED_URL_SECONDS);
-  const urls = new Map((data || []).map((item) => [item.path, item.signedUrl]));
-  for (const entry of list) {
-    for (const item of entry.media || []) {
-      item.url = urls.get(item.storage_path) || null;
+  const media = list.flatMap((entry) => entry.media || []);
+  if (!media.length) return entries;
+
+  const now = Date.now();
+  const missing = [];
+  for (const item of media) {
+    const hit = signedUrlCache.get(item.storage_path);
+    item.url = hit && hit.expiresAt > now ? hit.url : undefined;
+    if (item.url === undefined) missing.push(item.storage_path);
+  }
+  if (missing.length) {
+    const { data } = await supabase.storage
+      .from(MEDIA_BUCKET)
+      .createSignedUrls(missing, SIGNED_URL_SECONDS);
+    for (const { path, signedUrl } of data || []) {
+      if (!signedUrl) continue;
+      if (signedUrlCache.size >= URL_CACHE_MAX)
+        signedUrlCache.delete(signedUrlCache.keys().next().value); // oldest
+      signedUrlCache.set(path, { url: signedUrl, expiresAt: now + URL_REUSE_MS });
     }
+    for (const item of media)
+      if (item.url === undefined)
+        item.url = signedUrlCache.get(item.storage_path)?.url || null;
   }
   return entries;
 }
@@ -226,18 +258,27 @@ app.post("/api/auth/refresh", async (req, res, next) => {
   }
 });
 
-app.get("/api/auth/me", requireUser, async (req, res) => {
-  const { data, error } = await req.supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", req.user.id)
-    .maybeSingle();
-  if (error) return res.status(400).json({ error: error.message });
-  res.json({
-    user: req.user,
-    profile: data,
-    today: todayInUserTimezone(req.user),
-  });
+// The app needs the full user (created_at, fresh metadata) here, which the
+// token's claims don't carry, so fetch it — alongside the profile, not after.
+app.get("/api/auth/me", requireUser, async (req, res, next) => {
+  try {
+    const [userResult, profileResult] = await Promise.all([
+      req.supabase.auth.getUser(req.token),
+      req.supabase.from("profiles").select("*").eq("id", req.user.id).maybeSingle(),
+    ]);
+    if (userResult.error || !userResult.data.user)
+      return res.status(401).json({ error: "Invalid or expired access token." });
+    if (profileResult.error)
+      return res.status(400).json({ error: profileResult.error.message });
+    const user = userResult.data.user;
+    res.json({
+      user,
+      profile: profileResult.data,
+      today: todayInUserTimezone(user),
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 // Change the signed-in user's username. Updates the profile row (what the app
@@ -342,6 +383,8 @@ app.patch("/api/entries/:id", requireUser, async (req, res, next) => {
         .status(400)
         .json({ error: "No editable fields were provided." });
 
+    // Returns only the entry's own columns: autosave doesn't change notes or
+    // the photo, and the client keeps the ones it already has.
     const updates = { ...parsed.value, updated_at: new Date().toISOString() };
     const { data, error } = await req.supabase
       .from("entries")
@@ -349,7 +392,7 @@ app.patch("/api/entries/:id", requireUser, async (req, res, next) => {
       .eq("id", req.params.id)
       .eq("user_id", req.user.id)
       .eq("entry_date", todayInUserTimezone(req.user))
-      .select("*, notes(*), media(*)")
+      .select("*")
       .single();
     if (error)
       return res.status(error.code === "PGRST116" ? 423 : 400).json({
@@ -358,7 +401,6 @@ app.patch("/api/entries/:id", requireUser, async (req, res, next) => {
             ? "Entry is locked or does not exist."
             : error.message,
       });
-    await withMediaUrls(req.supabase, data);
     res.json({ entry: data });
   } catch (error) {
     next(error);
@@ -390,12 +432,17 @@ app.post("/api/entries/:entryId/notes", requireUser, async (req, res, next) => {
       return res
         .status(400)
         .json({ error: `Notes can be up to ${NOTE_MAX_CHARS} characters.` });
-    const entry = await loadEditableEntry(req, res, req.params.entryId);
-    if (!entry) return;
-    const { count, error: countError } = await req.supabase
-      .from("notes")
-      .select("id", { count: "exact", head: true })
-      .eq("entry_id", entry.id);
+    // The lock check and the note count are independent: run them together.
+    const [{ data: entry, error: entryError }, { count, error: countError }] =
+      await Promise.all([
+        fetchEntryDate(req, req.params.entryId),
+        req.supabase
+          .from("notes")
+          .select("id", { count: "exact", head: true })
+          .eq("entry_id", req.params.entryId),
+      ]);
+    const problem = editProblem(req, entry, entryError);
+    if (problem) return res.status(problem.status).json({ error: problem.error });
     if (countError) return res.status(400).json({ error: countError.message });
     if (count >= NOTES_PER_DAY)
       return res
@@ -419,17 +466,18 @@ app.post("/api/entries/:entryId/notes", requireUser, async (req, res, next) => {
 
 app.delete("/api/notes/:id", requireUser, async (req, res, next) => {
   try {
+    // Fetch the note and its entry's date in one query (embedded join).
     const { data: note, error: lookupError } = await req.supabase
       .from("notes")
-      .select("entry_id")
+      .select("entry_id, entries(entry_date)")
       .eq("id", req.params.id)
       .eq("user_id", req.user.id)
       .maybeSingle();
     if (lookupError)
       return res.status(400).json({ error: lookupError.message });
     if (!note) return res.status(404).json({ error: "Note not found." });
-    const entry = await loadEditableEntry(req, res, note.entry_id);
-    if (!entry) return;
+    const problem = editProblem(req, note.entries);
+    if (problem) return res.status(problem.status).json({ error: problem.error });
     const { error } = await req.supabase
       .from("notes")
       .delete()
@@ -462,12 +510,17 @@ app.post(
         return res
           .status(400)
           .json({ error: "Send a photo as the request body." });
-      const entry = await loadEditableEntry(req, res, req.params.entryId);
-      if (!entry) return;
-      const { count, error: countError } = await req.supabase
-        .from("media")
-        .select("id", { count: "exact", head: true })
-        .eq("entry_id", entry.id);
+      const [{ data: entry, error: entryError }, { count, error: countError }] =
+        await Promise.all([
+          fetchEntryDate(req, req.params.entryId),
+          req.supabase
+            .from("media")
+            .select("id", { count: "exact", head: true })
+            .eq("entry_id", req.params.entryId),
+        ]);
+      const problem = editProblem(req, entry, entryError);
+      if (problem)
+        return res.status(problem.status).json({ error: problem.error });
       if (countError)
         return res.status(400).json({ error: countError.message });
       if (count > 0)
@@ -495,26 +548,36 @@ app.post(
       if (storageError)
         return res.status(400).json({ error: storageError.message });
 
-      const { data, error } = await req.supabase
-        .from("media")
-        .insert({
-          entry_id: entry.id,
-          user_id: req.user.id,
-          storage_path: storagePath,
-          file_name: fileName,
-          mime_type: mimeType,
-          size_bytes: req.body.length,
-        })
-        .select()
-        .single();
+      // Record the row and sign the display URL at the same time.
+      const [{ data, error }, signed] = await Promise.all([
+        req.supabase
+          .from("media")
+          .insert({
+            entry_id: entry.id,
+            user_id: req.user.id,
+            storage_path: storagePath,
+            file_name: fileName,
+            mime_type: mimeType,
+            size_bytes: req.body.length,
+          })
+          .select()
+          .single(),
+        req.supabase.storage
+          .from(MEDIA_BUCKET)
+          .createSignedUrl(storagePath, SIGNED_URL_SECONDS),
+      ]);
       if (error) {
         // Don't leave an orphaned file behind if the database insert fails.
         await req.supabase.storage.from(MEDIA_BUCKET).remove([storagePath]);
         return res.status(400).json({ error: error.message });
       }
-      const wrapper = { media: [data] };
-      await withMediaUrls(req.supabase, wrapper);
-      res.status(201).json({ media: wrapper.media[0] });
+      const url = signed.data?.signedUrl || null;
+      if (url)
+        signedUrlCache.set(storagePath, {
+          url,
+          expiresAt: Date.now() + URL_REUSE_MS,
+        });
+      res.status(201).json({ media: { ...data, url } });
     } catch (error) {
       next(error);
     }
@@ -523,26 +586,29 @@ app.post(
 
 app.delete("/api/media/:id", requireUser, async (req, res, next) => {
   try {
+    // Fetch the photo and its entry's date in one query (embedded join).
     const { data: media, error: lookupError } = await req.supabase
       .from("media")
-      .select("storage_path, entry_id")
+      .select("storage_path, entry_id, entries(entry_date)")
       .eq("id", req.params.id)
       .eq("user_id", req.user.id)
       .single();
     if (lookupError)
       return res.status(404).json({ error: "Media record not found." });
-    const entry = await loadEditableEntry(req, res, media.entry_id);
-    if (!entry) return;
-    const { error: storageError } = await req.supabase.storage
-      .from(MEDIA_BUCKET)
-      .remove([media.storage_path]);
+    const problem = editProblem(req, media.entries);
+    if (problem) return res.status(problem.status).json({ error: problem.error });
+    // Remove the file and the row together.
+    const [{ error: storageError }, { error }] = await Promise.all([
+      req.supabase.storage.from(MEDIA_BUCKET).remove([media.storage_path]),
+      req.supabase
+        .from("media")
+        .delete()
+        .eq("id", req.params.id)
+        .eq("user_id", req.user.id),
+    ]);
+    forgetSignedUrl(media.storage_path);
     if (storageError)
       return res.status(400).json({ error: storageError.message });
-    const { error } = await req.supabase
-      .from("media")
-      .delete()
-      .eq("id", req.params.id)
-      .eq("user_id", req.user.id);
     if (error) return res.status(400).json({ error: error.message });
     res.status(204).send();
   } catch (error) {

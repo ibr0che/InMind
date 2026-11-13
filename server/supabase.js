@@ -17,7 +17,6 @@ export function requireEnvironment() {
 }
 
 export function createUserClient(accessToken) {
-  requireEnvironment();
   return createClient(
     process.env.SUPABASE_URL,
     process.env.SUPABASE_PUBLISHABLE_KEY,
@@ -32,3 +31,7 @@ export function createUserClient(accessToken) {
     },
   );
 }
+
+// One shared client for verifying access tokens; it holds no user session.
+requireEnvironment();
+export const authClient = createUserClient();
