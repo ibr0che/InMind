@@ -281,38 +281,64 @@ app.get("/api/auth/me", requireUser, async (req, res, next) => {
   }
 });
 
-// Change the signed-in user's username. Updates the profile row (what the app
-// shows) and the auth metadata (the fallback), so the two never disagree.
+// Change the signed-in user's settings: username and/or theme.
+// - username updates the profile row (what the app shows) and the auth
+//   metadata (the fallback), so the two never disagree.
+// - theme is stored in the auth metadata, so it follows the account to every
+//   device. Only its shape is checked; the app ignores names it doesn't know.
+const THEME_ID = /^[a-z][a-z0-9-]{0,29}$/;
 app.patch("/api/auth/me", requireUser, async (req, res, next) => {
   try {
-    const username = req.body?.username?.trim();
-    if (!USERNAME.test(username || ""))
-      return res.status(400).json({ error: USERNAME_RULE });
-    const { data, error } = await req.supabase
-      .from("profiles")
-      .update({ username })
-      .eq("id", req.user.id)
-      .select()
-      .maybeSingle();
-    if (error)
-      return res.status(error.code === "23505" ? 409 : 400).json({
-        error:
-          error.code === "23505" ? "That username is taken." : error.message,
-      });
-    // No row back means no profile, or row-level security blocked the update.
-    if (!data)
-      return res.status(404).json({ error: "Couldn't update your profile." });
-    // supabase-js can't update a user without a stored session, so call the Auth REST API directly.
-    await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
+    const body = req.body ?? {};
+    const hasUsername = body.username !== undefined;
+    const hasTheme = body.theme !== undefined;
+    if (!hasUsername && !hasTheme)
+      return res.status(400).json({ error: "Nothing to update." });
+
+    const metadata = {};
+    if (hasTheme) {
+      if (typeof body.theme !== "string" || !THEME_ID.test(body.theme))
+        return res.status(400).json({ error: "Unknown theme." });
+      metadata.theme = body.theme;
+    }
+
+    let profile = null;
+    if (hasUsername) {
+      const username = typeof body.username === "string" ? body.username.trim() : "";
+      if (!USERNAME.test(username))
+        return res.status(400).json({ error: USERNAME_RULE });
+      const { data, error } = await req.supabase
+        .from("profiles")
+        .update({ username })
+        .eq("id", req.user.id)
+        .select()
+        .maybeSingle();
+      if (error)
+        return res.status(error.code === "23505" ? 409 : 400).json({
+          error:
+            error.code === "23505" ? "That username is taken." : error.message,
+        });
+      // No row back means no profile, or row-level security blocked the update.
+      if (!data)
+        return res.status(404).json({ error: "Couldn't update your profile." });
+      profile = data;
+      metadata.username = username;
+    }
+
+    // supabase-js can't update a user without a stored session, so call the
+    // Auth REST API directly. It merges these keys into the existing metadata.
+    const auth = await fetch(`${process.env.SUPABASE_URL}/auth/v1/user`, {
       method: "PUT",
       headers: {
         apikey: process.env.SUPABASE_PUBLISHABLE_KEY,
         Authorization: req.headers.authorization,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ data: { username } }),
+      body: JSON.stringify({ data: metadata }),
     });
-    res.json({ profile: data });
+    if (!auth.ok && hasTheme)
+      return res.status(502).json({ error: "Couldn't save your theme." });
+    res.json({ profile, user: auth.ok ? await auth.json() : null });
   } catch (error) {
     next(error);
   }

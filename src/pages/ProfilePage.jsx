@@ -1,5 +1,51 @@
 import { useState } from "react";
-import { THEMES } from "../hooks/useThemes.js";
+import { THEMES, THEME_GROUPS } from "../hooks/useThemes.js";
+
+const NEXT_KEYS = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 };
+
+// Themes as preview cards, grouped (Classic, Duo). Works like radio buttons:
+// arrow keys move between themes, Home/End jump to the first/last.
+function ThemePicker({ theme, setTheme }) {
+  function onKeyDown(event) {
+    const index = THEMES.findIndex((t) => t.id === theme);
+    let next = null;
+    if (event.key in NEXT_KEYS) next = (index + NEXT_KEYS[event.key] + THEMES.length) % THEMES.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = THEMES.length - 1;
+    if (next === null) return;
+    event.preventDefault();
+    setTheme(THEMES[next].id);
+    event.currentTarget.querySelector(`[data-theme="${THEMES[next].id}"]`)?.focus();
+  }
+
+  return (
+    <div className="theme-picker" role="radiogroup" aria-label="Theme" onKeyDown={onKeyDown}>
+      {THEME_GROUPS.map((group) => (
+        <div key={group}>
+          <p className="theme-group-label">{group.toUpperCase()}</p>
+          <div className="theme-grid">
+            {THEMES.filter((t) => t.group === group).map((t) => (
+              // data-theme gives the card that theme's own colors (see styles.css)
+              <button
+                key={t.id}
+                type="button"
+                data-theme={t.id}
+                className="theme-option"
+                role="radio"
+                aria-checked={theme === t.id}
+                tabIndex={theme === t.id ? 0 : -1}
+                onClick={() => setTheme(t.id)}
+              >
+                <span className="theme-preview" aria-hidden="true" />
+                <span className="theme-name">{t.label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export default function ProfilePage({
   user,
@@ -20,22 +66,9 @@ export default function ProfilePage({
       <section className="card settings-card">
         <div className="card-head">
           <span>THEME</span>
+          <span>{THEMES.find((t) => t.id === theme)?.label}</span>
         </div>
-        <div className="swatches">
-          {THEMES.map((id) => (
-            // data-theme gives the swatch that theme's own --accent (see styles.css)
-            <button
-              key={id}
-              data-theme={id}
-              className="swatch"
-              aria-pressed={theme === id}
-              onClick={() => setTheme(id)}
-            >
-              <span className="swatch-dot" />
-              {id}
-            </button>
-          ))}
-        </div>
+        <ThemePicker theme={theme} setTheme={setTheme} />
       </section>
 
       <section className="card settings-card">

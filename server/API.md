@@ -14,7 +14,7 @@ Content-Type: application/json
 | POST | `/api/auth/signup` | Create a Supabase account and InMind profile |
 | POST | `/api/auth/login` | Return a Supabase session |
 | GET | `/api/auth/me` | Return the current user and profile |
-| PATCH | `/api/auth/me` | Change the username: `{ "username": "jordan" }` (3–30 of `a-z A-Z 0-9 _ . -`; 409 if taken) |
+| PATCH | `/api/auth/me` | Change settings: `{ "username": "jordan" }` (3–30 of `a-z A-Z 0-9 _ . -`; 409 if taken) and/or `{ "theme": "aurora" }` (saved to the account, so it follows you across devices) |
 
 Signup body:
 

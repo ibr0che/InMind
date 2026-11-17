@@ -19,7 +19,7 @@ const VIEWS = [
 
 export default function App() {
   const auth = useAuth();
-  const appearance = useTheme(); // one call, keep the whole object
+  const appearance = useTheme(auth.user); // follows the account once signed in
 
   if (auth.status === "loading") {
     return <div className="splash">Loading…</div>;

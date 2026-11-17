@@ -1,7 +1,7 @@
 @import url("https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Playfair+Display:wght@600;700&display=swap");
 
-/* Shared by every theme. Each theme below only sets three colors; the rest
-   is mixed from them, so a new theme is three lines. All themes are dark. */
+/* Shared by every theme. Each theme below sets four colors (background,
+   surface, accent, second accent); the rest is mixed from them. All dark. */
 :root {
   color-scheme: dark;
 
@@ -19,11 +19,13 @@
   --border: color-mix(in srgb, var(--surface), white 12%);
   --border-strong: color-mix(in srgb, var(--surface), white 22%);
 
-  /* text: light neutrals, all at least 4.5:1 on every theme's background */
-  --text: #f3f0ea; /* titles, headings */
-  --text-2: #d6d1c9; /* body text, form values */
-  --text-muted: #b5afa6; /* labels, timestamps */
-  --text-faint: #a29c92; /* placeholders, minor hints */
+  /* text: bright neutrals, all at least 4.5:1 on every theme's surfaces */
+  --white: #ffffff; /* the white accent: titles, active nav, countdown */
+  --text: #fbf9f5; /* headings */
+  --text-2: #e4e0d9; /* body text, form values */
+  --text-muted: #c3beb6; /* labels, timestamps */
+  --text-faint: #b1aba2; /* placeholders, minor hints */
+  --shine: inset 0 1px 0 rgba(255, 255, 255, 0.09); /* white top edge on cards */
 
   /* accent, mixed from the theme's --accent */
   --accent-contrast: #141210; /* text on an accent background */
@@ -36,6 +38,11 @@
   --glow: color-mix(in srgb, var(--accent) 40%, transparent);
   --glow-soft: color-mix(in srgb, var(--accent) 28%, transparent);
 
+  /* second accent: Duo themes use a second hue, Classic ones a lighter tint */
+  --accent-2-soft: color-mix(in srgb, var(--accent-2) 16%, var(--surface));
+  --glow-2: color-mix(in srgb, var(--accent-2) 36%, transparent);
+  --gradient: linear-gradient(120deg, var(--accent), var(--accent-2));
+
   /* status */
   --success: #8fd0a4;
   --success-soft: #1d3326;
@@ -45,37 +52,87 @@
 }
 
 /* Themes. Plain [data-theme] (not :root) so any element can preview one,
-   like the swatches on the Profile page. */
+   like the theme previews on the Profile page. */
 :root,
 [data-theme="sand"] {
-  --bg: #1b1917;
-  --surface: #252321;
-  --accent: #e08a6b;
+  --bg: #27231f;
+  --surface: #332e2a;
+  --accent: #e8906f;
+  --accent-2: #f6c08e;
 }
 [data-theme="violet"] {
-  --bg: #14101f;
-  --surface: #1e1830;
-  --accent: #a78bfa;
+  --bg: #1e1932;
+  --surface: #2a2343;
+  --accent: #ae94fb;
+  --accent-2: #d4c6ff;
 }
 [data-theme="rainforest"] {
-  --bg: #0c1a18;
-  --surface: #13292a;
-  --accent: #5fd1a0;
+  --bg: #122520;
+  --surface: #1b3733;
+  --accent: #62d6a4;
+  --accent-2: #a9ecd0;
 }
 [data-theme="red"] {
-  --bg: #1c1112;
-  --surface: #2a191b;
-  --accent: #f27c7c;
+  --bg: #281a1c;
+  --surface: #372427;
+  --accent: #f4807f;
+  --accent-2: #f9b9b6;
 }
 [data-theme="blue"] {
-  --bg: #0e1420;
-  --surface: #172133;
-  --accent: #6aa8f7;
+  --bg: #151e2f;
+  --surface: #202d45;
+  --accent: #6eabf8;
+  --accent-2: #b0d2fc;
 }
 [data-theme="orange"] {
-  --bg: #1d140c;
-  --surface: #2b1f14;
-  --accent: #f5a25a;
+  --bg: #281d13;
+  --surface: #38291d;
+  --accent: #f6a55c;
+  --accent-2: #fbcd9a;
+}
+
+/* Duo themes: two accent colors that run through the gradients */
+[data-theme="sunset"] {
+  --bg: #24162a;
+  --surface: #33203a;
+  --accent: #ff8a5c; /* orange */
+  --accent-2: #ff6fae; /* pink */
+}
+[data-theme="aurora"] {
+  --bg: #12222a;
+  --surface: #1b323b;
+  --accent: #5fe0b0; /* green */
+  --accent-2: #b39bff; /* violet */
+}
+[data-theme="ocean"] {
+  --bg: #111d2e;
+  --surface: #1a2c44;
+  --accent: #56b8ff; /* blue */
+  --accent-2: #4fe3d2; /* teal */
+}
+[data-theme="candy"] {
+  --bg: #23172e;
+  --surface: #322241;
+  --accent: #ff7cc8; /* pink */
+  --accent-2: #6fdcff; /* cyan */
+}
+[data-theme="ember"] {
+  --bg: #271813;
+  --surface: #38231c;
+  --accent: #ff6f5e; /* red */
+  --accent-2: #ffc95f; /* gold */
+}
+[data-theme="citrus"] {
+  --bg: #1c2414;
+  --surface: #252f1b;
+  --accent: #c6e95c; /* lime */
+  --accent-2: #ffb24f; /* orange */
+}
+[data-theme="berry"] {
+  --bg: #221429;
+  --surface: #31203a;
+  --accent: #c870ff; /* purple */
+  --accent-2: #ff6f93; /* raspberry */
 }
 
 /* =====================================================================
@@ -97,6 +154,13 @@
 }
 body {
   margin: 0;
+  min-height: 100vh;
+  /* a soft wash of both accents behind everything */
+  background:
+    radial-gradient(1100px 600px at 90% -10%, color-mix(in srgb, var(--accent-2) 13%, transparent), transparent 65%),
+    radial-gradient(1000px 650px at -10% 110%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 65%),
+    var(--bg);
+  background-attachment: fixed;
 }
 button {
   font-family: inherit;
@@ -109,6 +173,8 @@ h1 {
   font: 700 39px var(--font-serif);
   margin: 0;
   letter-spacing: -1px;
+  color: var(--white);
+  text-shadow: 0 0 28px rgba(255, 255, 255, 0.18);
 }
 
 /* =====================================================================
@@ -151,6 +217,7 @@ h1 {
 }
 .brand strong {
   display: block;
+  color: var(--white);
   font-family: var(--font-serif);
   font-size: 23px;
   letter-spacing: -0.5px;
@@ -216,9 +283,13 @@ nav button {
   font: 500 13px var(--font-sans);
   cursor: pointer;
 }
+nav button:hover {
+  color: var(--white);
+}
 nav button.active {
-  background: var(--surface-2);
-  color: var(--text);
+  background: var(--accent-soft);
+  color: var(--white);
+  box-shadow: inset 3px 0 0 var(--accent), var(--shine); /* accent marker + white edge */
 }
 nav button span {
   margin-left: 8px;
@@ -243,7 +314,7 @@ nav button span {
 }
 .sun {
   font-size: 22px;
-  color: var(--accent);
+  color: var(--accent-2);
 }
 
 .content {
@@ -259,7 +330,7 @@ nav button span {
 .eyebrow {
   font: 500 10px var(--font-mono);
   letter-spacing: 1.4px;
-  color: var(--text-muted);
+  color: var(--accent-strong);
   margin: 0 0 9px;
 }
 .subtle {
@@ -277,6 +348,7 @@ nav button span {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
+  box-shadow: var(--shine);
 }
 .card-head {
   display: flex;
@@ -290,7 +362,8 @@ nav button span {
 
 .primary {
   border: 0;
-  background: var(--accent);
+  background: var(--gradient);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
   color: var(--accent-contrast);
   padding: 10px 16px;
   border-radius: 6px;
@@ -453,6 +526,8 @@ nav button span {
 .countdown strong {
   font: 500 19px var(--font-mono);
   margin-top: 4px;
+  color: var(--white);
+  text-shadow: 0 0 16px var(--glow);
 }
 
 .progress {
@@ -463,7 +538,8 @@ nav button span {
 .progress span {
   height: 100%;
   display: block;
-  background: var(--accent);
+  background: linear-gradient(90deg, var(--accent), var(--accent-2), var(--white));
+  box-shadow: 0 0 10px var(--glow);
   border-radius: 3px;
   transition: width 0.5s;
 }
@@ -471,7 +547,8 @@ nav button span {
 .notice {
   display: flex;
   gap: 12px;
-  background: var(--accent-soft);
+  background: linear-gradient(120deg, var(--accent-soft), var(--accent-2-soft));
+  box-shadow: var(--shine);
   padding: 14px 18px;
   border-radius: 9px;
   color: var(--text-2);
@@ -519,7 +596,7 @@ nav button span {
   position: relative; /* anchor for the glow. No z-index/transform/overflow here, or the glow gets trapped or clipped */
   border-radius: var(--radius-card);
   padding: 26px 28px;
-  box-shadow: 0 14px 38px -22px var(--glow-soft);
+  box-shadow: 0 14px 38px -22px var(--glow-soft), var(--shine);
 }
 .today .card::before,
 .settings-card::before {
@@ -577,7 +654,8 @@ nav button span {
   background: linear-gradient(
     135deg,
     var(--accent-soft) 0%,
-    var(--surface) 65%
+    var(--surface) 55%,
+    var(--accent-2-soft) 100%
   );
 }
 .highlight-icon {
@@ -833,7 +911,7 @@ nav button span {
   right: 0;
   height: 12px;
   border-radius: var(--radius-field) var(--radius-field) 0 0;
-  background: var(--accent-soft);
+  background: var(--gradient);
 }
 .pad:hover {
   transform: translateY(-3px);
@@ -1029,8 +1107,8 @@ nav button span {
 }
 .chip {
   font-size: 10px;
-  color: var(--text-muted);
-  background: var(--surface-2);
+  color: var(--text-2);
+  background: var(--accent-2-soft);
   border-radius: 20px;
   padding: 4px 9px;
 }
@@ -1115,35 +1193,108 @@ nav button span {
   margin-bottom: 18px;
 }
 
-/* theme picker: each swatch carries its own data-theme, so it shows that theme's colors */
-.swatches {
+/* theme picker: a grid of preview cards, grouped (Classic, Duo). Each card
+   carries its own data-theme, so its preview shows that theme's colors. The
+   grid fills as many columns as fit, so more themes just add rows. */
+.theme-picker {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
+  gap: 18px;
+}
+.theme-group-label {
+  margin: 0 0 8px;
+  font: 500 10px var(--font-mono);
+  letter-spacing: 1.2px;
+  color: var(--text-muted);
+}
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
   gap: 10px;
 }
-.swatch {
+.theme-option {
+  position: relative;
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 8px;
-  padding: 8px 16px 8px 10px;
+  padding: 8px 8px 10px;
   border: 1px solid var(--border);
-  border-radius: 999px;
+  border-radius: 12px;
   background: var(--surface);
+  box-shadow: var(--shine);
   color: var(--text-2);
   font: 500 12px var(--font-sans);
-  text-transform: capitalize;
+  text-align: left;
   cursor: pointer;
+  transition: transform 0.15s, border-color 0.15s;
 }
-.swatch-dot {
+.theme-option:hover {
+  transform: translateY(-2px);
+  border-color: var(--border-strong);
+}
+/* the preview: the theme's background, a little card on it, and its two colors */
+.theme-preview {
+  position: relative;
+  height: 46px;
+  border-radius: 8px;
+  overflow: hidden;
+  background:
+    radial-gradient(60px 40px at 100% 0, color-mix(in srgb, var(--accent-2) 30%, transparent), transparent),
+    var(--bg);
+}
+.theme-preview::before {
+  content: ""; /* a mini card */
+  position: absolute;
+  left: 8px;
+  right: 30px;
+  bottom: 8px;
+  height: 18px;
+  border-radius: 4px;
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+.theme-preview::after {
+  content: ""; /* the two accents */
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
   width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  background: var(--accent);
+  height: 30px;
+  border-radius: 8px;
+  background: linear-gradient(var(--accent), var(--accent-2));
 }
-.swatch[aria-pressed="true"] {
-  border-color: var(--accent);
-  color: var(--text);
-  box-shadow: 0 0 0 3px var(--glow-soft);
+.theme-name {
+  padding: 0 2px;
+}
+@media (max-width: 600px) {
+  /* phones: smaller cards so two fit side by side in the narrow content area */
+  .theme-grid {
+    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+    gap: 8px;
+  }
+  .theme-preview {
+    height: 34px;
+  }
+}
+.theme-option[aria-checked="true"] {
+  border-color: var(--white);
+  color: var(--white);
+  box-shadow: 0 0 0 3px var(--glow-soft), var(--shine);
+}
+.theme-option[aria-checked="true"]::after {
+  content: "✓"; /* a check badge on the chosen theme */
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--white);
+  color: #141210;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .account-list {
