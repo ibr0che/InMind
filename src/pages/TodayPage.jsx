@@ -7,7 +7,7 @@ import {
   useState,
 } from "react";
 import { formatRemaining, longDate } from "../lib/dates.js";
-import { autoCapitalize } from "../lib/autoCapitalize.js";
+import { autoCorrect, fixLastWord } from "../lib/autoCorrect.js";
 
 const MOODS = ["Great", "Good", "Okay", "Low", "Rough"];
 const EMPTY_FORM = {
@@ -25,6 +25,18 @@ const TITLE_MAX = 25;
 const BODY_MAX = 2500;
 const NOTE_MAX = 100;
 const NOTES_PER_DAY = 10; // matches the server
+
+// Word-style capitals and contractions as you type. Fixes the box directly and
+// puts the caret back, so React doesn't jump it to the end.
+function corrected(event, prev) {
+  const box = event.target;
+  const { text, cursor } = autoCorrect(prev, box.value, box.selectionStart, box.maxLength > 0 ? box.maxLength : Infinity);
+  if (text !== box.value) {
+    box.value = text;
+    box.setSelectionRange(cursor, cursor);
+  }
+  return text;
+}
 
 const pickFields = (entry) => ({
   title: entry.title ?? "",
@@ -158,7 +170,10 @@ export default function TodayPage({ today, secondsLeft, journal }) {
 
   async function handleAddNote(event) {
     event.preventDefault();
-    const text = noteText.trim();
+    // Enter submits before a space is typed, so fix the last word here.
+    const typed = noteText.trim();
+    const fixed = fixLastWord(typed);
+    const text = fixed.length <= NOTE_MAX ? fixed : typed;
     if (!text || notesFull) return;
     try {
       const target = await ensureEntry();
@@ -255,7 +270,7 @@ export default function TodayPage({ today, secondsLeft, journal }) {
               rows={2}
               maxLength={HIGHLIGHT_MAX}
               value={form.highlight}
-              onChange={(e) => change("highlight", e.target.value)}
+              onChange={(e) => change("highlight", corrected(e, form.highlight))}
               placeholder="What was the best part of today?"
             />
           </div>
@@ -270,7 +285,7 @@ export default function TodayPage({ today, secondsLeft, journal }) {
               className="title-input"
               maxLength={TITLE_MAX}
               value={form.title}
-              onChange={(e) => change("title", e.target.value)}
+              onChange={(e) => change("title", corrected(e, form.title))}
               placeholder="Give today a title..."
               aria-label="Entry title"
             />
@@ -278,18 +293,7 @@ export default function TodayPage({ today, secondsLeft, journal }) {
               className="body-input"
               maxLength={BODY_MAX}
               value={form.body}
-              onChange={(e) => {
-                // Word-style capitals as you type. Fix the box directly and put the
-                // caret back, so React doesn't jump it to the end.
-                const box = e.target;
-                const caret = box.selectionStart;
-                const text = autoCapitalize(form.body, box.value, caret);
-                if (text !== box.value) {
-                  box.value = text;
-                  box.setSelectionRange(caret, caret);
-                }
-                change("body", text);
-              }}
+              onChange={(e) => change("body", corrected(e, form.body))}
               placeholder="What is on your mind? What do you want to remember about today?"
               aria-label="Journal entry"
             />
@@ -321,7 +325,7 @@ export default function TodayPage({ today, secondsLeft, journal }) {
               rows={2}
               maxLength={LESSONS_MAX}
               value={form.lessons}
-              onChange={(e) => change("lessons", e.target.value)}
+              onChange={(e) => change("lessons", corrected(e, form.lessons))}
               placeholder={"Lessons..."}
               aria-label="Lessons of the day"
             />
@@ -349,7 +353,7 @@ export default function TodayPage({ today, secondsLeft, journal }) {
                 maxLength={NOTE_MAX}
                 disabled={notesFull}
                 value={noteText}
-                onChange={(e) => setNoteText(e.target.value)}
+                onChange={(e) => setNoteText(corrected(e, noteText))}
                 // Enter adds the note; Shift+Enter starts a new line.
                 onKeyDown={(e) => {
                   if (e.key === "Enter" && !e.shiftKey) {

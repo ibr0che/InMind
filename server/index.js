@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -18,7 +19,17 @@ const MEDIA_BUCKET = "journal-media";
 const MAX_MEDIA_BYTES = 50 * 1024 * 1024; // matches Supabase's default per-file cap
 const SIGNED_URL_SECONDS = 60 * 60;
 
-app.use(helmet());
+// The desktop app loads the built client from this server, so photos (signed
+// Supabase Storage URLs) must be allowed as images.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        "img-src": ["'self'", "data:", "blob:", new URL(process.env.SUPABASE_URL).origin],
+      },
+    },
+  }),
+);
 app.use(compression());
 app.use(cors({ origin: clientOrigin }));
 app.use(express.json({ limit: "1mb" }));
@@ -169,7 +180,9 @@ function parseEntryFields(input = {}) {
 
 /* ---------- health ---------- */
 
-app.get("/", (_req, res) => res.json({ ok: true, service: "inmind-api" }));
+// In the desktop app "/" is the React app instead (see "built client" below).
+if (!process.env.SERVE_CLIENT)
+  app.get("/", (_req, res) => res.json({ ok: true, service: "inmind-api" }));
 
 /* ---------- auth ---------- */
 
@@ -642,6 +655,16 @@ app.delete("/api/media/:id", requireUser, async (req, res, next) => {
   }
 });
 
+/* ---------- built client (desktop app) ---------- */
+
+// The Electron app sets SERVE_CLIENT so one local server hosts both the API
+// and the built React app (same origin, so no CORS or proxy needed).
+if (process.env.SERVE_CLIENT) {
+  const distDir = fileURLToPath(new URL("../dist", import.meta.url));
+  app.use(express.static(distDir));
+  app.get(/^\/(?!api\/).*/, (_req, res) => res.sendFile("index.html", { root: distDir }));
+}
+
 /* ---------- errors ---------- */
 
 app.use((error, _req, res, _next) => {
@@ -655,4 +678,7 @@ app.use((error, _req, res, _next) => {
   res.status(500).json({ error: "Unexpected server error." });
 });
 
-app.listen(port, () => console.log(`API running on http://localhost:${port}`));
+// HOST is set by the desktop app to keep the server private to this machine.
+export const server = app.listen(port, process.env.HOST, () =>
+  console.log(`API running on http://localhost:${port}`),
+);
